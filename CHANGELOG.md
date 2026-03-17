@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.0.2
+- Add brand icon, issue tracker, and validation workflows for HACS submission
+
 ## 1.0.1
 - Add HACS and hassfest validation workflows
 

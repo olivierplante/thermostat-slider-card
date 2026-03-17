@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.0.1
+- Add HACS and hassfest validation workflows
+
 ## 1.0.0
 - Initial release
 - Thermostat card with visual slider control

@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.0.3
+- Fix manifest key ordering for hassfest compliance
+
 ## 1.0.2
 - Add brand icon, issue tracker, and validation workflows for HACS submission
 

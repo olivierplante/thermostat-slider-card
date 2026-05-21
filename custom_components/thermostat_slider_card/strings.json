@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Thermostat Slider Card",
+        "description": "Adds the Thermostat Slider Card to your Lovelace dashboards. No configuration is needed."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Thermostat Slider Card is already installed."
+    }
+  }
+}

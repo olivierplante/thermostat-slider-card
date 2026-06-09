@@ -14,6 +14,7 @@ A Home Assistant Lovelace card for climate control with a visual slider and aler
 - Large current temperature display with heating/cooling accent colors
 - Drag or tap slider for setpoint adjustment (debounced service calls)
 - Configurable freeze risk and heating-struggling alert banners
+- Compact `one-line` layout for stacking several thermostats in a small space
 - Theme-compatible with CSS custom property overrides
 - No external dependencies
 
@@ -34,6 +35,8 @@ The Lovelace resource auto-registers, so the card is available immediately.
 type: custom:thermostat-slider-card
 entity: climate.living_room_thermostat
 ```
+
+For a compact single-row variant, add `layout: one-line` — see [Configuration](https://github.com/olivierplante/thermostat-slider-card/blob/main/docs/configuration.md#layout).
 
 ## Docs
 

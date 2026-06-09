@@ -18,8 +18,9 @@ The card uses HA theme variables by default and works on both dark and light the
 | `--tsc-slider-track` | `rgba(255,255,255,0.08)` | Slider track background |
 | `--tsc-slider-fill` | `linear-gradient(90deg, #F59E0B, #FBBF24)` | Slider fill (heating) |
 | `--tsc-slider-fill-cool` | `linear-gradient(90deg, #06B6D4, #22D3EE)` | Slider fill (cooling) |
-| `--tsc-alert-bg` | `#EF4444` | Alert banner background |
-| `--tsc-alert-text` | `#FFF` | Alert banner text color |
+| `--tsc-alert-bg` | `#EF4444` | Alert banner background (and one-line alert popover) |
+| `--tsc-alert-text` | `#FFF` | Alert banner / popover text color |
+| `--tsc-alert-name-color` | `#EF4444` | Zone name color while alerting (one-line layout) |
 | `--tsc-offline-color` | `var(--disabled-text-color)` | Offline text color |
 | `--tsc-setpoint-color` | `var(--primary-text-color)` | Setpoint text when outside fill |
 

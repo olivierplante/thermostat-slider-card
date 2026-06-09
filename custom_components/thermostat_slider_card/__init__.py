@@ -13,7 +13,7 @@ _LOGGER = logging.getLogger(__name__)
 DOMAIN = "thermostat_slider_card"
 RESOURCE_URL = "/thermostat_slider_card/thermostat-slider-card.js"
 JS_FILE = pathlib.Path(__file__).parent / "www" / "thermostat-slider-card.js"
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 VERSIONED_URL = f"{RESOURCE_URL}?v={VERSION}"
 
 CONFIG_SCHEMA = cv.empty_config_schema(DOMAIN)

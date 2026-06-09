@@ -9,7 +9,7 @@
  * - Theme-compatible with CSS custom property overrides
  */
 
-class ThermostatSliderCard extends HTMLElement {
+export class ThermostatSliderCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
@@ -21,6 +21,42 @@ class ThermostatSliderCard extends HTMLElement {
     if (!config.entity) {
       throw new Error('Please define an entity');
     }
+    // Layout: 'full' (default) or 'one-line'. An unknown value falls back to
+    // 'full' (so a typo never breaks the dashboard) and warns to the console.
+    let layout = config.layout || 'full';
+    if (layout !== 'full' && layout !== 'one-line') {
+      console.warn(
+        `thermostat-slider-card: unknown layout "${layout}", falling back ` +
+          `to "full". Valid values: "full", "one-line".`
+      );
+      layout = 'full';
+    }
+
+    // slider_width: percentage of the row the slider occupies in one-line
+    // layout (so stacked cards' sliders align). Number only; clamped 20–80.
+    // Non-numeric → default; out-of-range → clamp; both warn.
+    const SLIDER_WIDTH_DEFAULT = 55;
+    const SLIDER_WIDTH_MIN = 20;
+    const SLIDER_WIDTH_MAX = 80;
+    let sliderWidth = SLIDER_WIDTH_DEFAULT;
+    if (config.slider_width != null) {
+      const raw = Number(config.slider_width);
+      if (!Number.isFinite(raw)) {
+        console.warn(
+          `thermostat-slider-card: slider_width "${config.slider_width}" is ` +
+            `not a number, using default ${SLIDER_WIDTH_DEFAULT}.`
+        );
+      } else if (raw < SLIDER_WIDTH_MIN || raw > SLIDER_WIDTH_MAX) {
+        sliderWidth = Math.max(SLIDER_WIDTH_MIN, Math.min(SLIDER_WIDTH_MAX, raw));
+        console.warn(
+          `thermostat-slider-card: slider_width ${raw} out of range, clamped ` +
+            `to ${sliderWidth} (valid ${SLIDER_WIDTH_MIN}–${SLIDER_WIDTH_MAX}).`
+        );
+      } else {
+        sliderWidth = raw;
+      }
+    }
+
     this._config = {
       entity: config.entity,
       name: config.name || '',
@@ -30,7 +66,9 @@ class ThermostatSliderCard extends HTMLElement {
       timer: config.timer || '',
       threshold: config.threshold || '',
       freeze_threshold: config.freeze_threshold ?? 5,
-      ...config
+      ...config,
+      layout,
+      slider_width: sliderWidth
     };
     this._rendered = false;
     this._render();
@@ -191,11 +229,109 @@ class ThermostatSliderCard extends HTMLElement {
         .hidden {
           display: none !important;
         }
+
+        /* ── One-line layout ──────────────────────────────────────────
+           Single row: [alert-icon?] name · temp · slider. The slider has a
+           fixed width (slider_width %, set inline) so stacked cards align.
+           Temp + icon never shrink; the NAME is the only flexible element,
+           so it is what clips with an ellipsis when space is tight. */
+        .card.layout-one-line {
+          flex-direction: row;
+          align-items: center;
+          gap: 12px;
+          padding: 10px 14px;
+          position: relative;
+        }
+        .card.layout-one-line .name {
+          text-align: left;
+          margin-bottom: 0;
+          flex: 1 1 auto;
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .card.layout-one-line .name.alert-name {
+          color: var(--tsc-alert-name-color, #EF4444);
+        }
+        .card.layout-one-line .temperature {
+          font-size: 18px;
+          padding: 0;
+          flex: 0 0 auto;
+        }
+        .card.layout-one-line .slider-container {
+          /* flex-basis set inline from slider_width; never grow/shrink. */
+          flex-grow: 0;
+          flex-shrink: 0;
+          padding: 0;
+          margin-top: 0;
+          min-width: 0;
+        }
+        .card.layout-one-line .slider-track {
+          height: 32px;
+        }
+        .card.layout-one-line .alert-inline {
+          flex: 0 0 auto;
+        }
+        .card.layout-one-line .offline-text {
+          font-size: 18px;
+          padding: 0;
+          flex: 1;
+          text-align: left;
+        }
+        /* The full-width text banner is never shown in one-line mode; the
+           inline icon + popover replace it. */
+        .card.layout-one-line #alert-banner {
+          display: none !important;
+        }
+
+        /* Inline alert icon (one-line only) + tap-to-reveal popover. */
+        .alert-inline {
+          position: relative;
+          flex: 0 0 auto;
+          display: flex;
+          align-items: center;
+        }
+        .alert-icon-inline {
+          font-size: 16px;
+          line-height: 1;
+          cursor: pointer;
+          padding: 2px;
+        }
+        .alert-popover {
+          position: absolute;
+          bottom: calc(100% + 6px);
+          left: 50%;
+          transform: translateX(-50%);
+          background: var(--tsc-alert-bg, #EF4444);
+          color: var(--tsc-alert-text, #FFF);
+          font-size: 12px;
+          font-weight: 500;
+          padding: 4px 8px;
+          border-radius: 6px;
+          white-space: nowrap;
+          z-index: 2;
+          pointer-events: none;
+        }
+        /* Little pointer triangle under the bubble. */
+        .alert-popover::after {
+          content: '';
+          position: absolute;
+          top: 100%;
+          left: 50%;
+          transform: translateX(-50%);
+          border: 4px solid transparent;
+          border-top-color: var(--tsc-alert-bg, #EF4444);
+        }
       </style>
-      <div class="card" id="card">
+      <div class="card ${this._config.layout === 'one-line' ? 'layout-one-line' : ''}" id="card">
         <div class="alert-banner hidden" id="alert-banner">
           <span class="alert-icon" id="alert-icon"></span>
           <span class="alert-text" id="alert-text"></span>
+        </div>
+        <div class="alert-inline hidden" id="alert-inline">
+          <span class="alert-icon-inline" id="alert-icon-inline"></span>
+          <span class="alert-popover hidden" id="alert-popover"></span>
         </div>
         <div class="name" id="name"></div>
         <div class="temperature" id="temperature"></div>
@@ -211,6 +347,12 @@ class ThermostatSliderCard extends HTMLElement {
       </div>
     `;
 
+    // Fix the slider's width in one-line layout so stacked cards align.
+    if (this._config.layout === 'one-line') {
+      const sliderContainer = this.shadowRoot.getElementById('slider-container');
+      sliderContainer.style.flexBasis = `${this._config.slider_width}%`;
+    }
+
     this._setupEventListeners();
     if (this._hass) this._updateDisplay();
   }
@@ -223,7 +365,16 @@ class ThermostatSliderCard extends HTMLElement {
     card.addEventListener('click', (e) => {
       if (this._isDragging) return;
       if (e.target.closest('.slider-track') || e.target.closest('.slider-thumb')) return;
+      if (e.target.closest('.alert-inline')) return;
       this._openMoreInfo();
+    });
+
+    // One-line alert icon: tap to reveal the alert text in a popover bubble.
+    // stopPropagation so it doesn't also trigger the card's more-info click.
+    const alertIcon = this.shadowRoot.getElementById('alert-icon-inline');
+    alertIcon.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._toggleAlertPopover();
     });
 
     track.addEventListener('mousedown', (e) => this._startDrag(e));
@@ -370,6 +521,26 @@ class ThermostatSliderCard extends HTMLElement {
     this.dispatchEvent(event);
   }
 
+  /** Toggle the one-line alert popover bubble (auto-hides after a few s). */
+  _toggleAlertPopover() {
+    const pop = this.shadowRoot.getElementById('alert-popover');
+    if (!pop) return;
+    const showing = !pop.classList.contains('hidden');
+    if (this._popoverTimer) {
+      clearTimeout(this._popoverTimer);
+      this._popoverTimer = null;
+    }
+    if (showing) {
+      pop.classList.add('hidden');
+      return;
+    }
+    pop.classList.remove('hidden');
+    this._popoverTimer = setTimeout(() => {
+      pop.classList.add('hidden');
+      this._popoverTimer = null;
+    }, 3000);
+  }
+
   /** Resolve freeze_threshold: static number or entity ID. */
   _getFreezeThreshold() {
     const val = this._config.freeze_threshold;
@@ -396,7 +567,11 @@ class ThermostatSliderCard extends HTMLElement {
     const alertBanner = this.shadowRoot.getElementById('alert-banner');
     const alertIcon = this.shadowRoot.getElementById('alert-icon');
     const alertText = this.shadowRoot.getElementById('alert-text');
+    const alertInline = this.shadowRoot.getElementById('alert-inline');
+    const alertIconInline = this.shadowRoot.getElementById('alert-icon-inline');
+    const alertPopover = this.shadowRoot.getElementById('alert-popover');
     const fill = this.shadowRoot.getElementById('slider-fill');
+    const oneLine = this._config.layout === 'one-line';
 
     // Set name
     const name = this._config.name
@@ -410,6 +585,7 @@ class ThermostatSliderCard extends HTMLElement {
       offlineEl.classList.remove('hidden');
       sliderContainer.classList.add('hidden');
       alertBanner.classList.add('hidden');
+      alertInline.classList.add('hidden');
       return;
     }
 
@@ -432,13 +608,17 @@ class ThermostatSliderCard extends HTMLElement {
     tempEl.classList.toggle('cooling', hvacAction === 'cooling');
     fill.classList.toggle('cooling', hvacAction === 'cooling');
 
-    // Alert banner logic
+    // Alert logic \u2014 compute the MDI icon + text once, then route to the full
+    // banner (full layout) or the inline icon + popover (one-line layout).
+    // Icons use <ha-icon> to match the ec_weather card's approach.
     let showAlert = false;
+    let alertMdi = '';
+    let alertLabel = '';
     const freezeThreshold = this._getFreezeThreshold();
 
     if (currentTemp !== null && currentTemp !== undefined && currentTemp < freezeThreshold) {
-      alertIcon.textContent = '\u2744\uFE0F';
-      alertText.textContent = 'Freeze risk';
+      alertMdi = 'mdi:snowflake';
+      alertLabel = 'Freeze risk';
       showAlert = true;
     } else if (this._config.timer) {
       const timerEntity = this._hass.states[this._config.timer];
@@ -450,13 +630,30 @@ class ThermostatSliderCard extends HTMLElement {
       if (timerEntity && timerEntity.state === 'idle'
           && currentTemp !== null && currentTemp !== undefined
           && currentTemp <= thresholdVal) {
-        alertIcon.textContent = '\uD83C\uDF21\uFE0F';
-        alertText.textContent = 'Struggling to heat';
+        alertMdi = 'mdi:thermometer-alert';
+        alertLabel = 'Struggling to heat';
         showAlert = true;
       }
     }
 
-    alertBanner.classList.toggle('hidden', !showAlert);
+    const iconHtml = alertMdi ? `<ha-icon icon="${alertMdi}"></ha-icon>` : '';
+    alertIcon.innerHTML = iconHtml;
+    alertText.textContent = alertLabel;
+    alertIconInline.innerHTML = iconHtml;
+    alertPopover.textContent = alertLabel;
+
+    // Red name when alerting in one-line mode (the icon carries the "what").
+    nameEl.classList.toggle('alert-name', showAlert && oneLine);
+
+    // The two layouts are mutually exclusive: full uses the text banner,
+    // one-line uses the inline icon + popover. Drive visibility explicitly
+    // (not via CSS) so the active indicator is unambiguous.
+    alertBanner.classList.toggle('hidden', !showAlert || oneLine);
+    alertInline.classList.toggle('hidden', !showAlert || !oneLine);
+    if (!showAlert) {
+      // Reset the popover if the alert cleared while it was open.
+      alertPopover.classList.add('hidden');
+    }
 
     // Setpoint / slider position (only update if not dragging)
     if (!this._isDragging && !this._debounceTimer) {
@@ -480,17 +677,24 @@ class ThermostatSliderCard extends HTMLElement {
   }
 }
 
-customElements.define('thermostat-slider-card', ThermostatSliderCard);
+// Define the custom element. Safe under test too — jsdom requires the element
+// to be registered before it can be constructed. Guard only the catalog
+// registration + load log so importing in unit tests stays quiet.
+if (!customElements.get('thermostat-slider-card')) {
+  customElements.define('thermostat-slider-card', ThermostatSliderCard);
+}
 
-window.customCards = window.customCards || [];
-window.customCards.push({
-  type: 'thermostat-slider-card',
-  name: 'Thermostat Slider Card',
-  description: 'A thermostat card with slider control and alert banners',
-  preview: true
-});
+if (typeof window === 'undefined' || !window.__TSC_TEST__) {
+  window.customCards = window.customCards || [];
+  window.customCards.push({
+    type: 'thermostat-slider-card',
+    name: 'Thermostat Slider Card',
+    description: 'A thermostat card with slider control and alert banners',
+    preview: true
+  });
 
-console.info('%c THERMOSTAT-SLIDER-CARD %c loaded ',
-  'color: white; background: #F59E0B; font-weight: bold;',
-  'color: #F59E0B; background: white; font-weight: bold;'
-);
+  console.info('%c THERMOSTAT-SLIDER-CARD %c loaded ',
+    'color: white; background: #F59E0B; font-weight: bold;',
+    'color: #F59E0B; background: white; font-weight: bold;'
+  );
+}

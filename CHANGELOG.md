@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.2.0
+
+**Compact one-line layout.** A new `layout: one-line` option renders the thermostat as a single horizontal row — name on the left, current temperature in the middle, slider on the right. Ideal for stacking several thermostats in a small space.
+
+```yaml
+type: custom:thermostat-slider-card
+entity: climate.living_room_thermostat
+layout: one-line
+```
+
+**Adjustable slider width.** In one-line mode, `slider_width` sets the slider's width as a percentage of the card (default `55`, range 20–80), so the sliders in a stack of cards line up neatly. The current temperature and any alert icon stay fully visible; the room name truncates if space is tight.
+
+**Refined alerts in one-line mode.** When a zone has a freeze-risk or heating-struggling alert, a small icon appears next to the name and the name turns red. Tap the icon to see the alert text. The full layout keeps its alert banner as before.
+
 ## 1.1.0
 
 **Add and remove from the UI** — Thermostat Slider Card now uses Home Assistant's config flow. Install from Settings > Devices & Services > Add Integration. The Lovelace resource is automatically cleaned up when you remove the integration, so uninstalls no longer leave a dangling `/thermostat_slider_card/thermostat-slider-card.js` 404 in the browser console.

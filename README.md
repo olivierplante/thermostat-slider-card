@@ -6,7 +6,13 @@ A Home Assistant Lovelace card for climate control with a visual slider and aler
 [![GitHub Release](https://img.shields.io/github/v/release/olivierplante/thermostat-slider-card)](https://github.com/olivierplante/thermostat-slider-card/releases)
 
 <p>
-  <img src="https://raw.githubusercontent.com/olivierplante/thermostat-slider-card/main/screenshots/card.png" alt="Thermostat Slider Card" width="300">
+  <img src="https://raw.githubusercontent.com/olivierplante/thermostat-slider-card/main/screenshots/card.png" alt="Thermostat Slider Card — full layout" width="300">
+</p>
+
+Or stack several zones compactly with the `one-line` layout:
+
+<p>
+  <img src="https://raw.githubusercontent.com/olivierplante/thermostat-slider-card/main/screenshots/card-one-line.png" alt="Thermostat Slider Card — one-line layout" width="560">
 </p>
 
 ## What you get
@@ -36,7 +42,28 @@ type: custom:thermostat-slider-card
 entity: climate.living_room_thermostat
 ```
 
-For a compact single-row variant, add `layout: one-line` — see [Configuration](https://github.com/olivierplante/thermostat-slider-card/blob/main/docs/configuration.md#layout).
+### One-line layout
+
+Add `layout: one-line` for the compact single-row variant, and stack several in a `vertical-stack` to control multiple zones in a small space:
+
+```yaml
+type: vertical-stack
+cards:
+  - type: custom:thermostat-slider-card
+    entity: climate.kitchen_thermostat
+    name: Kitchen
+    layout: one-line
+  - type: custom:thermostat-slider-card
+    entity: climate.living_room_thermostat
+    name: Living Room
+    layout: one-line
+  - type: custom:thermostat-slider-card
+    entity: climate.office_thermostat
+    name: Office
+    layout: one-line
+```
+
+Use `slider_width` (default `55`) to tune how wide the slider is. See [Configuration](https://github.com/olivierplante/thermostat-slider-card/blob/main/docs/configuration.md#layout) for all one-line options.
 
 ## Docs
 

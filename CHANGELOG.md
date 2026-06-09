@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.1
+
+**Documentation.** Added a screenshot and YAML example of the one-line layout to the README.
+
 ## 1.2.0
 
 **Compact one-line layout.** A new `layout: one-line` option renders the thermostat as a single horizontal row — name on the left, current temperature in the middle, slider on the right. Ideal for stacking several thermostats in a small space.

@@ -15,7 +15,7 @@ afterEach(() => {
 
 function freezeCard() {
   return mount(
-    { layout: "one-line", freeze_threshold: 5 },
+    { layout: "one-line", alert_low: 5 },
     makeHass({ current_temperature: 3 }),
   );
 }

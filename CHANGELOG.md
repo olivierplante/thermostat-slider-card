@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.3.0
+
+**Beyond thermostats.** The card now works with `humidifier`, `fan` and `water_heater` entities, with the right attributes, services and units per domain. Humidity shows as `%`, a fan's slider sets its speed, and a water heater's its target temperature. The domain is detected automatically from the entity.
+
+**Slider range comes from the entity.** `min`, `max` and `step` now default to the entity's own limits (`min_temp`/`max_temp`, `min_humidity`/`max_humidity`, fan speed steps). Setting them in the config still overrides. Setpoints outside the range no longer break the slider; the pill stays pinned at the edge showing the real value, and the grab handle stays visible.
+
+> **Heads-up:** earlier versions defaulted climate sliders to 14–21. If you relied on that and prefer the tighter range, set `min: 14` and `max: 21` explicitly.
+
+**Mode-true colors.** The slider fill now follows the device's mode instead of its momentary activity: heating and humidifying are amber, cooling, drying and dehumidifying are cyan, fans are grey. An air conditioner finally looks like a cooler even when the compressor is idle. Every mode color can be themed individually.
+
+**Long-press to toggle.** Press and hold the slider for one second to turn the device on or off; the card flashes to confirm. Moving your finger cancels the hold and becomes a normal drag. Disable with `allow_toggle: false`.
+
+**Smarter alerts.** New `alert_low` and `alert_high` thresholds (number, entity, or `false` to disable) with device-aware defaults: freeze risk for climate, "Too dry"/"Too humid" for humidifiers, with the mold threshold following EPA guidance. The struggling alert is now direction-aware: "Struggling to cool", "Struggling to dry", etc. `freeze_threshold` still works but is deprecated in favor of `alert_low`.
+
 ## 1.2.1
 
 **Documentation.** Added a screenshot and YAML example of the one-line layout to the README.

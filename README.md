@@ -1,6 +1,6 @@
 # Thermostat Slider Card
 
-A Home Assistant Lovelace card for climate control with a visual slider and alert banners. Works with any HA `climate` entity.
+A Home Assistant Lovelace card for setpoint control with a visual slider and alert banners. Works with `climate`, `humidifier`, `fan` and `water_heater` entities.
 
 [![HACS Default](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://github.com/hacs/integration)
 [![GitHub Release](https://img.shields.io/github/v/release/olivierplante/thermostat-slider-card)](https://github.com/olivierplante/thermostat-slider-card/releases)
@@ -17,10 +17,12 @@ Or stack several zones compactly with the `one-line` layout:
 
 ## What you get
 
-- Large current temperature display with heating/cooling accent colors
+- Works with climate, humidifier, fan and water_heater entities (°/% auto-detected)
+- Large current reading with mode-true colors — coolers read cyan, heaters amber, fans grey
 - Drag or tap slider for setpoint adjustment (debounced service calls)
-- Configurable freeze risk and heating-struggling alert banners
-- Compact `one-line` layout for stacking several thermostats in a small space
+- Long-press the slider to toggle the device on/off
+- Device-aware alerts: freeze risk, too humid (mold), too dry, and direction-aware "struggling" detection
+- Compact `one-line` layout for stacking several devices in a small space
 - Theme-compatible with CSS custom property overrides
 - No external dependencies
 

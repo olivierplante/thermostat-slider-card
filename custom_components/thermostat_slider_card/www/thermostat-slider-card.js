@@ -1,13 +1,92 @@
 /**
  * Thermostat Slider Card
- * A custom Home Assistant card for climate/thermostat control.
+ * A custom Home Assistant card for setpoint control of climate, humidifier,
+ * fan and water_heater entities.
  *
  * Features:
- * - Large current temperature display (accent color when heating)
+ * - Large current reading (°/%) with action accent colors
  * - Slider for setpoint adjustment with tap and drag
- * - Configurable alert banners (freeze risk, heating struggling)
+ * - Mode-aware fill palette (raise=amber, lower=cyan, neutral=grey)
+ * - Long-press the slider to toggle the device on/off
+ * - Generalized alert banners (extreme low/high + direction-aware stuck)
  * - Theme-compatible with CSS custom property overrides
  */
+
+// ─── Domain adapters ─────────────────────────────────────────────────────
+// Each supported domain maps onto the same UI: a current reading, a target
+// the slider sets, a service to write it, and a unit. Range defaults come
+// from the entity's own attributes; config min/max/step always override.
+const DOMAIN_ADAPTERS = {
+  climate: {
+    currentAttr: 'current_temperature',
+    targetAttr: 'temperature',
+    service: ['climate', 'set_temperature'],
+    param: 'temperature',
+    unit: '°',
+    precision: 1,
+    actionAttr: 'hvac_action',
+    entityMin: 'min_temp',
+    entityMax: 'max_temp',
+    entityStep: 'target_temp_step',
+    fallback: { min: 7, max: 35, step: 0.5 },
+    alerts: true,
+  },
+  humidifier: {
+    currentAttr: 'current_humidity',
+    targetAttr: 'humidity',
+    service: ['humidifier', 'set_humidity'],
+    param: 'humidity',
+    unit: '%',
+    precision: 0,
+    actionAttr: 'action',
+    entityMin: 'min_humidity',
+    entityMax: 'max_humidity',
+    entityStep: 'target_humidity_step',
+    fallback: { min: 0, max: 100, step: 1 },
+    alerts: true,
+  },
+  fan: {
+    // A fan's "setpoint" is its speed — there is no separate measured value,
+    // so the big number and the slider both show the percentage.
+    currentAttr: 'percentage',
+    targetAttr: 'percentage',
+    service: ['fan', 'set_percentage'],
+    param: 'percentage',
+    unit: '%',
+    precision: 0,
+    actionAttr: null,
+    entityMin: null,
+    entityMax: null,
+    entityStep: 'percentage_step',
+    fallback: { min: 0, max: 100, step: 1 },
+    alerts: false,
+  },
+  water_heater: {
+    currentAttr: 'current_temperature',
+    targetAttr: 'temperature',
+    service: ['water_heater', 'set_temperature'],
+    param: 'temperature',
+    unit: '°',
+    precision: 1,
+    actionAttr: null,
+    entityMin: 'min_temp',
+    entityMax: 'max_temp',
+    entityStep: 'target_temp_step',
+    fallback: { min: 30, max: 70, step: 1 },
+    alerts: false,
+  },
+};
+
+// Supported-features bits needed for on/off (homeassistant.toggle).
+// Climate: TURN_OFF=128 | TURN_ON=256. Water heater: ON_OFF=8.
+// Humidifier and fan are toggleable by domain design.
+const TOGGLE_FEATURE_BITS = { climate: 384, water_heater: 8 };
+
+function asNumber(value) {
+  const n = Number(value);
+  return value !== null && value !== undefined && value !== ''
+    && typeof value !== 'boolean' && Number.isFinite(n) ? n : null;
+}
 
 export class ThermostatSliderCard extends HTMLElement {
   constructor() {
@@ -15,12 +94,27 @@ export class ThermostatSliderCard extends HTMLElement {
     this.attachShadow({ mode: 'open' });
     this._isDragging = false;
     this._debounceTimer = null;
+    this._longPressTimer = null;
+    this._toggleFired = false;
   }
 
   setConfig(config) {
     if (!config.entity) {
       throw new Error('Please define an entity');
     }
+
+    // Resolve the entity's domain adapter. Unknown domains warn and fall
+    // back to climate behavior (so a misconfigured card still renders).
+    const domain = String(config.entity).split('.')[0];
+    if (!DOMAIN_ADAPTERS[domain]) {
+      console.warn(
+        `thermostat-slider-card: unsupported domain "${domain}", treating ` +
+          `it like climate. Supported: ${Object.keys(DOMAIN_ADAPTERS).join(', ')}.`
+      );
+    }
+    this._domain = DOMAIN_ADAPTERS[domain] ? domain : 'climate';
+    this._adapter = DOMAIN_ADAPTERS[this._domain];
+
     // Layout: 'full' (default) or 'one-line'. An unknown value falls back to
     // 'full' (so a typo never breaks the dashboard) and warns to the console.
     let layout = config.layout || 'full';
@@ -57,18 +151,34 @@ export class ThermostatSliderCard extends HTMLElement {
       }
     }
 
+    // Alert thresholds. alert_low / alert_high accept number | entity-id |
+    // false (disable). freeze_threshold is a deprecated alias for alert_low.
+    let alertLow = config.alert_low;
+    if (config.freeze_threshold !== undefined) {
+      if (config.alert_low !== undefined) {
+        console.warn(
+          'thermostat-slider-card: both freeze_threshold and alert_low are ' +
+            'set — alert_low wins. Remove freeze_threshold.'
+        );
+      } else {
+        console.warn(
+          'thermostat-slider-card: freeze_threshold is deprecated, use ' +
+            'alert_low instead.'
+        );
+        alertLow = config.freeze_threshold;
+      }
+    }
+
     this._config = {
-      entity: config.entity,
       name: config.name || '',
-      min: config.min || 14,
-      max: config.max || 21,
-      step: config.step || 0.5,
       timer: config.timer || '',
       threshold: config.threshold || '',
-      freeze_threshold: config.freeze_threshold ?? 5,
       ...config,
+      entity: config.entity,
       layout,
-      slider_width: sliderWidth
+      slider_width: sliderWidth,
+      alert_low: alertLow,
+      alert_high: config.alert_high,
     };
     this._rendered = false;
     this._render();
@@ -82,6 +192,72 @@ export class ThermostatSliderCard extends HTMLElement {
 
   getCardSize() {
     return 3;
+  }
+
+  /**
+   * Resolve the slider range: config min/max/step win, then the entity's
+   * own attributes (min_temp/max_temp, min/max_humidity, percentage_step…),
+   * then per-domain fallbacks.
+   */
+  _getRange() {
+    const adapter = this._adapter;
+    const entity = this._hass ? this._hass.states[this._config.entity] : null;
+    const attrs = entity ? entity.attributes : {};
+    const min = asNumber(this._config.min)
+      ?? (adapter.entityMin ? asNumber(attrs[adapter.entityMin]) : null)
+      ?? adapter.fallback.min;
+    const max = asNumber(this._config.max)
+      ?? (adapter.entityMax ? asNumber(attrs[adapter.entityMax]) : null)
+      ?? adapter.fallback.max;
+    const step = asNumber(this._config.step)
+      ?? (adapter.entityStep ? asNumber(attrs[adapter.entityStep]) : null)
+      ?? adapter.fallback.step;
+    return { min, max, step };
+  }
+
+  /**
+   * Mode info from the entity: which color family the fill belongs to
+   * (raise → amber, lower → cyan, neutral → grey), a mode key for per-mode
+   * CSS variables, and whether the device is off.
+   */
+  _getModeInfo(entity) {
+    const state = entity.state;
+    if (state === 'off') return { family: null, modeKey: null, isOff: true };
+
+    if (this._domain === 'climate') {
+      if (state === 'heat') return { family: 'raise', modeKey: 'heat', isOff: false };
+      if (state === 'cool') return { family: 'lower', modeKey: 'cool', isOff: false };
+      if (state === 'dry') return { family: 'lower', modeKey: 'dry', isOff: false };
+      if (state === 'fan_only') return { family: 'neutral', modeKey: 'fan_only', isOff: false };
+      // heat_cool / auto: stable mode is ambiguous — follow the live action
+      // when the integration reports one, default to raise otherwise.
+      const action = entity.attributes.hvac_action;
+      const family = action === 'cooling' ? 'lower' : 'raise';
+      return { family, modeKey: state, isOff: false };
+    }
+    if (this._domain === 'humidifier') {
+      // device_class is optional; absent → assume humidifier (raising).
+      const lowering = entity.attributes.device_class === 'dehumidifier';
+      return {
+        family: lowering ? 'lower' : 'raise',
+        modeKey: lowering ? 'dehumidify' : 'humidify',
+        isOff: false,
+      };
+    }
+    if (this._domain === 'fan') {
+      return { family: 'neutral', modeKey: 'fan', isOff: false };
+    }
+    // water_heater
+    return { family: 'raise', modeKey: 'water-heater', isOff: false };
+  }
+
+  /** Whether the entity can be toggled on/off (drives the long-press). */
+  _supportsToggle(entity) {
+    const bits = TOGGLE_FEATURE_BITS[this._domain];
+    if (bits === undefined) return true; // humidifier, fan
+    const sf = entity.attributes.supported_features;
+    if (sf === null || sf === undefined) return true; // legacy integrations
+    return (sf & bits) !== 0;
   }
 
   _render() {
@@ -106,6 +282,20 @@ export class ThermostatSliderCard extends HTMLElement {
         .card.unavailable {
           opacity: 0.5;
           filter: grayscale(100%);
+        }
+        /* Device is off: dim the reading and the fill, keep it interactive. */
+        .card.is-off .temperature,
+        .card.is-off .slider-fill {
+          opacity: 0.45;
+        }
+        /* Brief confirmation flash when a long-press toggle fires. */
+        .card.toggle-flash {
+          animation: tsc-toggle-flash 0.4s ease;
+        }
+        @keyframes tsc-toggle-flash {
+          0% { opacity: 1; }
+          40% { opacity: 0.4; }
+          100% { opacity: 1; }
         }
         .alert-banner {
           background: var(--tsc-alert-bg, #EF4444);
@@ -162,6 +352,10 @@ export class ThermostatSliderCard extends HTMLElement {
           cursor: pointer;
           touch-action: none;
           overflow: hidden;
+          /* Long-press support: suppress iOS callout / text selection. */
+          -webkit-touch-callout: none;
+          -webkit-user-select: none;
+          user-select: none;
         }
         .slider-fill {
           position: absolute;
@@ -176,21 +370,52 @@ export class ThermostatSliderCard extends HTMLElement {
           align-items: center;
           justify-content: center;
         }
-        .slider-fill.cooling {
+        /* ── Mode palette ─────────────────────────────────────────────
+           The fill's color family follows the entity's MODE (stable
+           identity): raise=amber (default above), lower=cyan, neutral=grey.
+           Per-mode variables let themes restyle any single mode. */
+        .slider-fill.family-lower {
           background: var(--tsc-slider-fill-cool, linear-gradient(90deg, #06B6D4, #22D3EE));
         }
+        .slider-fill.family-neutral {
+          background: var(--tsc-slider-fill-neutral, linear-gradient(90deg, #6B7280, #9CA3AF));
+        }
+        .slider-fill.mode-heat {
+          background: var(--tsc-fill-heat, var(--tsc-slider-fill, linear-gradient(90deg, #F59E0B, #FBBF24)));
+        }
+        .slider-fill.mode-cool {
+          background: var(--tsc-fill-cool, var(--tsc-slider-fill-cool, linear-gradient(90deg, #06B6D4, #22D3EE)));
+        }
+        .slider-fill.mode-dry {
+          background: var(--tsc-fill-dry, var(--tsc-slider-fill-cool, linear-gradient(90deg, #06B6D4, #22D3EE)));
+        }
+        .slider-fill.mode-dehumidify {
+          background: var(--tsc-fill-dehumidify, var(--tsc-slider-fill-cool, linear-gradient(90deg, #06B6D4, #22D3EE)));
+        }
+        .slider-fill.mode-humidify {
+          background: var(--tsc-fill-humidify, var(--tsc-slider-fill, linear-gradient(90deg, #F59E0B, #FBBF24)));
+        }
+        .slider-fill.mode-fan,
+        .slider-fill.mode-fan_only {
+          background: var(--tsc-fill-fan, var(--tsc-slider-fill-neutral, linear-gradient(90deg, #6B7280, #9CA3AF)));
+        }
+        .slider-fill.mode-water-heater {
+          background: var(--tsc-fill-water-heater, var(--tsc-slider-fill, linear-gradient(90deg, #F59E0B, #FBBF24)));
+        }
         .slider-thumb {
+          /* JS sets --tsc-thumb-pos to the raw percent. The thumb's center
+             sits 10px inside the fill's edge (the original look), and the
+             clamp keeps it inside the track so it survives 0%/100%. */
           position: absolute;
-          right: 0;
+          left: clamp(8px, calc(var(--tsc-thumb-pos, 0%) - 10px), calc(100% - 8px));
           top: 50%;
-          transform: translateY(-50%);
+          transform: translate(-50%, -50%);
           width: 4px;
           height: 22px;
           background: rgba(255, 255, 255, 0.95);
           border-radius: 2px;
-          margin-right: 8px;
           cursor: grab;
-          transition: height 0.15s ease, width 0.15s ease;
+          transition: height 0.15s ease, width 0.15s ease, left 0.1s ease;
           touch-action: none;
         }
         .slider-setpoint {
@@ -338,9 +563,8 @@ export class ThermostatSliderCard extends HTMLElement {
         <div class="offline-text hidden" id="offline">Offline</div>
         <div class="slider-container" id="slider-container">
           <div class="slider-track" id="slider-track">
-            <div class="slider-fill" id="slider-fill">
-              <div class="slider-thumb" id="slider-thumb"></div>
-            </div>
+            <div class="slider-fill" id="slider-fill"></div>
+            <div class="slider-thumb" id="slider-thumb"></div>
             <span class="slider-setpoint" id="slider-setpoint"></span>
           </div>
         </div>
@@ -381,11 +605,15 @@ export class ThermostatSliderCard extends HTMLElement {
     track.addEventListener('touchstart', (e) => this._startDrag(e), { passive: false });
     thumb.addEventListener('mousedown', (e) => this._startDrag(e));
     thumb.addEventListener('touchstart', (e) => this._startDrag(e), { passive: false });
+    // Android long-press fires contextmenu — swallow it so the 1s hold
+    // reaches our toggle timer instead of a browser menu.
+    track.addEventListener('contextmenu', (e) => e.preventDefault());
 
     document.addEventListener('mousemove', (e) => this._onDrag(e));
     document.addEventListener('touchmove', (e) => this._onDrag(e), { passive: false });
     document.addEventListener('mouseup', () => this._endDrag());
     document.addEventListener('touchend', () => this._endDrag());
+    document.addEventListener('touchcancel', () => this._cancelDrag());
   }
 
   _startDrag(e) {
@@ -397,29 +625,80 @@ export class ThermostatSliderCard extends HTMLElement {
     e.stopPropagation();
 
     this._isDragging = true;
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    this._dragStartX = clientX;
+    const point = e.touches ? e.touches[0] : e;
+    this._dragStartX = point.clientX;
+    this._dragStartY = point.clientY;
     this._dragMoved = false;
+    this._toggleFired = false;
+
+    // Long-press toggle: a 1s motionless hold on the slider toggles the
+    // device. Movement cancels (becomes a drag); firing consumes the
+    // gesture (no tap-step, no drag on release).
+    if (this._longPressTimer) clearTimeout(this._longPressTimer);
+    if (this._config.allow_toggle !== false && this._supportsToggle(entity)) {
+      this._longPressTimer = setTimeout(() => {
+        this._longPressTimer = null;
+        if (this._isDragging && !this._dragMoved) this._fireToggle();
+      }, 1000);
+    }
 
     this.shadowRoot.getElementById('slider-thumb').classList.add('dragging');
   }
 
   _onDrag(e) {
-    if (!this._isDragging) return;
+    if (!this._isDragging || this._toggleFired) return;
     e.preventDefault();
 
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    if (!this._dragMoved && Math.abs(clientX - this._dragStartX) > 5) {
-      this._dragMoved = true;
+    // A fingertip held on glass always drifts a little — measure 2D
+    // displacement with a 10px slop radius (native long-press behavior)
+    // so the hold survives micro-movement but a real drag cancels it.
+    const point = e.touches ? e.touches[0] : e;
+    if (!this._dragMoved) {
+      const deltaX = point.clientX - this._dragStartX;
+      const deltaY = (point.clientY ?? this._dragStartY) - this._dragStartY;
+      const displacement = Math.hypot(deltaX, deltaY);
+      if (displacement > 10) {
+        this._dragMoved = true;
+        if (this._longPressTimer) {
+          clearTimeout(this._longPressTimer);
+          this._longPressTimer = null;
+        }
+      }
     }
     if (this._dragMoved) this._updateSliderFromEvent(e);
+  }
+
+  /**
+   * The system interrupted the touch (iOS touchcancel): abandon the gesture
+   * with no tap, no commit and no toggle, leaving state clean.
+   */
+  _cancelDrag() {
+    if (!this._isDragging) return;
+    this._isDragging = false;
+    this._dragMoved = false;
+    this._toggleFired = false;
+    if (this._longPressTimer) {
+      clearTimeout(this._longPressTimer);
+      this._longPressTimer = null;
+    }
+    this.shadowRoot.getElementById('slider-thumb').classList.remove('dragging');
   }
 
   _endDrag() {
     if (!this._isDragging) return;
 
     this._isDragging = false;
+    if (this._longPressTimer) {
+      clearTimeout(this._longPressTimer);
+      this._longPressTimer = null;
+    }
     this.shadowRoot.getElementById('slider-thumb').classList.remove('dragging');
+
+    // A fired toggle consumed the gesture — no tap-step, no drag commit.
+    if (this._toggleFired) {
+      this._toggleFired = false;
+      return;
+    }
 
     if (!this._dragMoved) {
       this._handleSliderTap();
@@ -429,18 +708,34 @@ export class ThermostatSliderCard extends HTMLElement {
     if (this._debounceTimer) clearTimeout(this._debounceTimer);
     this._debounceTimer = setTimeout(() => {
       this._debounceTimer = null;
-      this._setTemperature(this._pendingValue);
+      this._setTarget(this._pendingValue);
     }, 500);
+  }
+
+  /** Long-press fired: toggle the device with a visible confirmation. */
+  _fireToggle() {
+    this._toggleFired = true;
+    this.shadowRoot.getElementById('slider-thumb').classList.remove('dragging');
+
+    this._hass.callService('homeassistant', 'toggle', {
+      entity_id: this._config.entity,
+    });
+
+    // Visible cause-and-effect: flash the card when the toggle fires.
+    const card = this.shadowRoot.getElementById('card');
+    card.classList.add('toggle-flash');
+    setTimeout(() => card.classList.remove('toggle-flash'), 400);
   }
 
   _handleSliderTap() {
     const entity = this._hass.states[this._config.entity];
     if (!entity) return;
 
+    const { min, max, step } = this._getRange();
+    const target = asNumber(entity.attributes[this._adapter.targetAttr]);
     const currentSetpoint = this._debounceTimer
       ? this._pendingValue
-      : (entity.attributes.temperature || this._config.min);
-    const { min, max, step } = this._config;
+      : (target ?? min);
     const track = this.shadowRoot.getElementById('slider-track');
     const rect = track.getBoundingClientRect();
 
@@ -460,7 +755,7 @@ export class ThermostatSliderCard extends HTMLElement {
     if (this._debounceTimer) clearTimeout(this._debounceTimer);
     this._debounceTimer = setTimeout(() => {
       this._debounceTimer = null;
-      this._setTemperature(this._pendingValue);
+      this._setTarget(this._pendingValue);
     }, 500);
   }
 
@@ -471,7 +766,7 @@ export class ThermostatSliderCard extends HTMLElement {
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
     let percent = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
 
-    const { min, max, step } = this._config;
+    const { min, max, step } = this._getRange();
     let value = min + percent * (max - min);
     value = Math.round(value / step) * step;
     value = Math.max(min, Math.min(max, value));
@@ -480,15 +775,36 @@ export class ThermostatSliderCard extends HTMLElement {
     this._updateSliderVisual(value);
   }
 
+  /**
+   * Render the fill + setpoint pill for a value. The fill clamps to 0–100%
+   * and the pill always stays inside the track, even when the entity's
+   * setpoint is outside the slider range (issue #7). A null value (missing
+   * or non-numeric target attribute) hides the pill entirely.
+   */
   _updateSliderVisual(value) {
-    const { min, max } = this._config;
-    const percent = ((value - min) / (max - min)) * 100;
-
     const fill = this.shadowRoot.getElementById('slider-fill');
+    const thumb = this.shadowRoot.getElementById('slider-thumb');
     const setpointEl = this.shadowRoot.getElementById('slider-setpoint');
 
+    const numeric = asNumber(value);
+    if (numeric === null) {
+      fill.style.width = '0%';
+      thumb.classList.add('hidden');
+      setpointEl.classList.add('hidden');
+      return;
+    }
+    setpointEl.classList.remove('hidden');
+    thumb.classList.remove('hidden');
+
+    const { min, max } = this._getRange();
+    const rawPercent = ((numeric - min) / (max - min)) * 100;
+    const percent = Math.max(0, Math.min(100, rawPercent));
+
     fill.style.width = `${percent}%`;
-    setpointEl.textContent = `${value.toFixed(1)}°`;
+    // The thumb tracks the same percent; CSS clamps it into the track.
+    thumb.style.setProperty('--tsc-thumb-pos', `${percent}%`);
+    setpointEl.textContent =
+      `${numeric.toFixed(this._adapter.precision)}${this._adapter.unit}`;
 
     const threshold = 12;
     if (percent >= threshold) {
@@ -497,18 +813,22 @@ export class ThermostatSliderCard extends HTMLElement {
       setpointEl.classList.remove('outside');
       setpointEl.classList.add('inside');
     } else {
-      setpointEl.style.left = `${percent + 2}%`;
+      // Start the outside pill past the thumb's clamped position (8px +
+      // half the thumb) so the handle never covers the first digit.
+      setpointEl.style.left = `calc(${percent}% + 16px)`;
       setpointEl.style.transform = 'translateY(-50%)';
       setpointEl.classList.remove('inside');
       setpointEl.classList.add('outside');
     }
   }
 
-  _setTemperature(temperature) {
+  /** Write the slider value through the domain's service. */
+  _setTarget(value) {
     if (!this._hass || !this._config) return;
-    this._hass.callService('climate', 'set_temperature', {
+    const [serviceDomain, service] = this._adapter.service;
+    this._hass.callService(serviceDomain, service, {
       entity_id: this._config.entity,
-      temperature: temperature
+      [this._adapter.param]: value,
     });
   }
 
@@ -541,18 +861,70 @@ export class ThermostatSliderCard extends HTMLElement {
     }, 3000);
   }
 
-  /** Resolve freeze_threshold: static number or entity ID. */
-  _getFreezeThreshold() {
-    const val = this._config.freeze_threshold;
-    if (typeof val === 'number') return val;
+  /** Resolve a threshold: static number, entity ID, or null. */
+  _resolveThreshold(val) {
+    const n = asNumber(val);
+    if (n !== null) return n;
     if (typeof val === 'string' && val.includes('.')) {
       const entity = this._hass.states[val];
       if (entity && entity.state !== 'unavailable' && entity.state !== 'unknown') {
-        const n = parseFloat(entity.state);
-        if (!isNaN(n)) return n;
+        const parsed = parseFloat(entity.state);
+        if (!isNaN(parsed)) return parsed;
       }
     }
-    return 5; // fallback default
+    return null;
+  }
+
+  /**
+   * Per-domain alert defaults. The alert matching the device's failure
+   * mode defaults ON; everything else is opt-in. `false` in config disables.
+   */
+  _getAlertDefaults(entity) {
+    if (this._domain === 'climate') return { low: 5, high: null };
+    if (this._domain === 'humidifier') {
+      const dehumidifier = entity.attributes.device_class === 'dehumidifier';
+      return dehumidifier ? { low: null, high: 65 } : { low: 25, high: 65 };
+    }
+    return { low: null, high: null }; // fan, water_heater: opt-in only
+  }
+
+  /** Resolve one alert threshold from config + defaults. */
+  _getAlertThreshold(configValue, defaultValue) {
+    if (configValue === false) return null;
+    if (configValue === undefined) return defaultValue;
+    return this._resolveThreshold(configValue);
+  }
+
+  _getAlertLabels(entity) {
+    if (this._domain === 'humidifier') {
+      return {
+        low: { label: 'Too dry', icon: 'mdi:water-minus' },
+        high: { label: 'Too humid', icon: 'mdi:water-alert' },
+        stuckIcon: 'mdi:water-alert',
+      };
+    }
+    if (this._domain === 'climate' || this._domain === 'water_heater') {
+      return {
+        low: { label: 'Freeze risk', icon: 'mdi:snowflake' },
+        high: { label: 'Overheating', icon: 'mdi:thermometer-high' },
+        stuckIcon: 'mdi:thermometer-alert',
+      };
+    }
+    return {
+      low: { label: 'Too low', icon: 'mdi:alert-circle-outline' },
+      high: { label: 'Too high', icon: 'mdi:alert-circle-outline' },
+      stuckIcon: 'mdi:alert-circle-outline',
+    };
+  }
+
+  /** The verb in "Struggling to <verb>", from the active mode. */
+  _getStuckVerb(modeInfo) {
+    const byMode = {
+      heat: 'heat', cool: 'cool', dry: 'dry',
+      dehumidify: 'dry', humidify: 'humidify', 'water-heater': 'heat',
+    };
+    if (modeInfo.modeKey && byMode[modeInfo.modeKey]) return byMode[modeInfo.modeKey];
+    return modeInfo.family === 'lower' ? 'cool' : 'heat';
   }
 
   _updateDisplay() {
@@ -572,6 +944,7 @@ export class ThermostatSliderCard extends HTMLElement {
     const alertPopover = this.shadowRoot.getElementById('alert-popover');
     const fill = this.shadowRoot.getElementById('slider-fill');
     const oneLine = this._config.layout === 'one-line';
+    const adapter = this._adapter;
 
     // Set name
     const name = this._config.name
@@ -594,45 +967,66 @@ export class ThermostatSliderCard extends HTMLElement {
     offlineEl.classList.add('hidden');
     sliderContainer.classList.remove('hidden');
 
-    // Current temperature
-    const currentTemp = entity.attributes.current_temperature;
-    if (currentTemp !== null && currentTemp !== undefined) {
-      tempEl.textContent = `${parseFloat(currentTemp).toFixed(1)}°`;
-    } else {
-      tempEl.textContent = '\u2014';
-    }
+    // Current reading (per-domain attribute, unit and precision)
+    const currentValue = asNumber(entity.attributes[adapter.currentAttr]);
+    tempEl.textContent = currentValue !== null
+      ? `${currentValue.toFixed(adapter.precision)}${adapter.unit}`
+      : '—';
 
-    // HVAC action — heating or cooling accent
-    const hvacAction = entity.attributes.hvac_action;
-    tempEl.classList.toggle('heating', hvacAction === 'heating');
-    tempEl.classList.toggle('cooling', hvacAction === 'cooling');
-    fill.classList.toggle('cooling', hvacAction === 'cooling');
+    // Action accent (transient "working right now" signal on the number):
+    // heating/humidifying → amber class, cooling/drying → cyan class.
+    const action = adapter.actionAttr
+      ? entity.attributes[adapter.actionAttr] : null;
+    tempEl.classList.toggle('heating', action === 'heating' || action === 'humidifying');
+    tempEl.classList.toggle('cooling', action === 'cooling' || action === 'drying');
 
-    // Alert logic \u2014 compute the MDI icon + text once, then route to the full
-    // banner (full layout) or the inline icon + popover (one-line layout).
-    // Icons use <ha-icon> to match the ec_weather card's approach.
+    // Mode palette (stable identity on the fill) + off-state dim.
+    const modeInfo = this._getModeInfo(entity);
+    card.classList.toggle('is-off', modeInfo.isOff);
+    const keep = fill.className.split(' ').filter(
+      (c) => c && !c.startsWith('family-') && !c.startsWith('mode-')
+    );
+    if (modeInfo.family) keep.push(`family-${modeInfo.family}`);
+    if (modeInfo.modeKey) keep.push(`mode-${modeInfo.modeKey}`);
+    fill.className = keep.join(' ');
+
+    // ── Alerts: extreme low / high, then direction-aware stuck ──────────
     let showAlert = false;
     let alertMdi = '';
     let alertLabel = '';
-    const freezeThreshold = this._getFreezeThreshold();
 
-    if (currentTemp !== null && currentTemp !== undefined && currentTemp < freezeThreshold) {
-      alertMdi = 'mdi:snowflake';
-      alertLabel = 'Freeze risk';
-      showAlert = true;
-    } else if (this._config.timer) {
-      const timerEntity = this._hass.states[this._config.timer];
-      const thresholdEntity = this._config.threshold
-        ? this._hass.states[this._config.threshold] : null;
-      const thresholdVal = thresholdEntity
-        ? parseFloat(thresholdEntity.state) : 10;
+    if (adapter.alerts || this._config.alert_low !== undefined
+        || this._config.alert_high !== undefined || this._config.timer) {
+      const defaults = adapter.alerts
+        ? this._getAlertDefaults(entity) : { low: null, high: null };
+      const labels = this._getAlertLabels(entity);
+      const low = this._getAlertThreshold(this._config.alert_low, defaults.low);
+      const high = this._getAlertThreshold(this._config.alert_high, defaults.high);
 
-      if (timerEntity && timerEntity.state === 'idle'
-          && currentTemp !== null && currentTemp !== undefined
-          && currentTemp <= thresholdVal) {
-        alertMdi = 'mdi:thermometer-alert';
-        alertLabel = 'Struggling to heat';
+      if (currentValue !== null && low !== null && currentValue < low) {
+        alertMdi = labels.low.icon;
+        alertLabel = labels.low.label;
         showAlert = true;
+      } else if (currentValue !== null && high !== null && currentValue > high) {
+        alertMdi = labels.high.icon;
+        alertLabel = labels.high.label;
+        showAlert = true;
+      } else if (this._config.timer) {
+        const timerEntity = this._hass.states[this._config.timer];
+        const thresholdVal = this._config.threshold
+          ? this._resolveThreshold(this._config.threshold) : 10;
+
+        if (timerEntity && timerEntity.state === 'idle'
+            && currentValue !== null && thresholdVal !== null) {
+          const stuck = modeInfo.family === 'lower'
+            ? currentValue >= thresholdVal
+            : currentValue <= thresholdVal;
+          if (stuck && modeInfo.family && modeInfo.family !== 'neutral') {
+            alertMdi = labels.stuckIcon;
+            alertLabel = `Struggling to ${this._getStuckVerb(modeInfo)}`;
+            showAlert = true;
+          }
+        }
       }
     }
 
@@ -655,9 +1049,10 @@ export class ThermostatSliderCard extends HTMLElement {
       alertPopover.classList.add('hidden');
     }
 
-    // Setpoint / slider position (only update if not dragging)
+    // Setpoint / slider position (only update if not dragging). A missing
+    // or non-numeric target hides the pill instead of faking a value.
     if (!this._isDragging && !this._debounceTimer) {
-      const setpoint = entity.attributes.temperature || this._config.min;
+      const setpoint = asNumber(entity.attributes[adapter.targetAttr]);
       this._updateSliderVisual(setpoint);
     }
   }
@@ -670,9 +1065,6 @@ export class ThermostatSliderCard extends HTMLElement {
     return {
       entity: 'climate.thermostat',
       name: 'Zone',
-      min: 14,
-      max: 21,
-      step: 0.5,
     };
   }
 }
@@ -689,7 +1081,7 @@ if (typeof window === 'undefined' || !window.__TSC_TEST__) {
   window.customCards.push({
     type: 'thermostat-slider-card',
     name: 'Thermostat Slider Card',
-    description: 'A thermostat card with slider control and alert banners',
+    description: 'A slider card for climate, humidifier, fan and water heater entities',
     preview: true
   });
 

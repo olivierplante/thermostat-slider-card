@@ -20,7 +20,7 @@ afterEach(() => {
 
 function freezeCard() {
   return mount(
-    { layout: "one-line", freeze_threshold: 5 },
+    { layout: "one-line", alert_low: 5 },
     makeHass({ current_temperature: 3 }),
   );
 }
@@ -64,9 +64,9 @@ describe("static helpers", () => {
   });
 
   it("test_get_stub_config", () => {
+    // Ranges are entity-driven since 1.3.0 — the stub only needs an entity.
     const stub = ThermostatSliderCard.getStubConfig();
     expect(stub.entity).toBeTruthy();
-    expect(stub.min).toBe(14);
   });
 
   it("test_get_config_element", () => {

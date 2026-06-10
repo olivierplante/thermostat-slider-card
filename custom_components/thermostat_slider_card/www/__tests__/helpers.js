@@ -47,3 +47,34 @@ export function $(card, selector) {
 export function byId(card, id) {
   return card.shadowRoot.getElementById(id);
 }
+
+/**
+ * Build a stub hass around a single arbitrary-domain entity.
+ * Records callService invocations on hass.calls.
+ */
+export function makeHassEntity(entityId, attrs = {}, state = "on", extraStates = {}) {
+  const hass = {
+    states: {
+      [entityId]: {
+        entity_id: entityId,
+        state,
+        attributes: { friendly_name: "Test Device", ...attrs },
+      },
+      ...extraStates,
+    },
+    calls: [],
+    callService(domain, service, data) {
+      hass.calls.push({ domain, service, data });
+    },
+  };
+  return hass;
+}
+
+/** Mount a card for an arbitrary entity id. */
+export function mountEntity(entityId, config = {}, hass) {
+  const card = new ThermostatSliderCard();
+  card.setConfig({ entity: entityId, ...config });
+  document.body.appendChild(card);
+  card.hass = hass || makeHassEntity(entityId);
+  return card;
+}

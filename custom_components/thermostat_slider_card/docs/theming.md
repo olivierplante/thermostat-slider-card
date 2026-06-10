@@ -16,8 +16,16 @@ The card uses HA theme variables by default and works on both dark and light the
 | `--tsc-heating-color` | `#F59E0B` | Temperature color when heating |
 | `--tsc-cooling-color` | `#06B6D4` | Temperature color when cooling |
 | `--tsc-slider-track` | `rgba(255,255,255,0.08)` | Slider track background |
-| `--tsc-slider-fill` | `linear-gradient(90deg, #F59E0B, #FBBF24)` | Slider fill (heating) |
-| `--tsc-slider-fill-cool` | `linear-gradient(90deg, #06B6D4, #22D3EE)` | Slider fill (cooling) |
+| `--tsc-slider-fill` | `linear-gradient(90deg, #F59E0B, #FBBF24)` | Fill for the *raise* family (heat, humidify, water heater) |
+| `--tsc-slider-fill-cool` | `linear-gradient(90deg, #06B6D4, #22D3EE)` | Fill for the *lower* family (cool, dry, dehumidify) |
+| `--tsc-slider-fill-neutral` | `linear-gradient(90deg, #6B7280, #9CA3AF)` | Fill for the *neutral* family (fans) |
+| `--tsc-fill-heat` | family default | Fill override for climate `heat` mode |
+| `--tsc-fill-cool` | family default | Fill override for climate `cool` mode |
+| `--tsc-fill-dry` | family default | Fill override for climate `dry` mode |
+| `--tsc-fill-humidify` | family default | Fill override for humidifiers |
+| `--tsc-fill-dehumidify` | family default | Fill override for dehumidifiers |
+| `--tsc-fill-fan` | family default | Fill override for fans / `fan_only` |
+| `--tsc-fill-water-heater` | family default | Fill override for water heaters |
 | `--tsc-alert-bg` | `#EF4444` | Alert banner background (and one-line alert popover) |
 | `--tsc-alert-text` | `#FFF` | Alert banner / popover text color |
 | `--tsc-alert-name-color` | `#EF4444` | Zone name color while alerting (one-line layout) |

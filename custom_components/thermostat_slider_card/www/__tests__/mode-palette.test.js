@@ -52,9 +52,43 @@ describe("climate modes", () => {
     expect(fillOf(card).classList.contains("family-lower")).toBe(true);
   });
 
-  it("test_auto_without_action_defaults_raise", () => {
-    const card = mountEntity("climate.x", {}, makeHassEntity("climate.x", tempAttrs, "auto"));
+  it("test_auto_heat_only_capability_is_raise", () => {
+    // KaliPete's heat pump: auto + idle, but the device can only heat.
+    const card = mountEntity("climate.x", {}, makeHassEntity("climate.x",
+      { ...tempAttrs, hvac_modes: ["heat", "off", "auto"], hvac_action: "idle" },
+      "auto"));
     expect(fillOf(card).classList.contains("family-raise")).toBe(true);
+  });
+
+  it("test_auto_cool_only_capability_is_lower", () => {
+    // A cool-only AC in auto must not idle amber like a heater.
+    const card = mountEntity("climate.x", {}, makeHassEntity("climate.x",
+      { ...tempAttrs, hvac_modes: ["cool", "dry", "fan_only", "off", "auto"], hvac_action: "idle" },
+      "auto"));
+    expect(fillOf(card).classList.contains("family-lower")).toBe(true);
+  });
+
+  it("test_auto_dual_sticky_action_through_idle", () => {
+    // Dual-capable: the last active action's family survives idle cycles.
+    const dual = { ...tempAttrs, hvac_modes: ["heat", "cool", "off", "auto"] };
+    const card = mountEntity("climate.x", {}, makeHassEntity("climate.x",
+      { ...dual, hvac_action: "cooling" }, "auto"));
+    expect(fillOf(card).classList.contains("family-lower")).toBe(true);
+    card.hass = makeHassEntity("climate.x", { ...dual, hvac_action: "idle" }, "auto");
+    expect(fillOf(card).classList.contains("family-lower")).toBe(true);
+  });
+
+  it("test_auto_dual_unknown_is_neutral", () => {
+    // Dual-capable, idle since load: no claim, neutral grey (fan color).
+    const card = mountEntity("climate.x", {}, makeHassEntity("climate.x",
+      { ...tempAttrs, hvac_modes: ["heat", "cool", "off", "auto"], hvac_action: "idle" },
+      "auto"));
+    expect(fillOf(card).classList.contains("family-neutral")).toBe(true);
+  });
+
+  it("test_auto_without_any_capability_info_is_neutral", () => {
+    const card = mountEntity("climate.x", {}, makeHassEntity("climate.x", tempAttrs, "auto"));
+    expect(fillOf(card).classList.contains("family-neutral")).toBe(true);
   });
 
   it("test_fan_only_mode_is_neutral", () => {

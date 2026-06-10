@@ -181,6 +181,7 @@ export class ThermostatSliderCard extends HTMLElement {
       alert_high: config.alert_high,
     };
     this._rendered = false;
+    this._lastActionFamily = null; // sticky auto-mode memory, per entity
     this._render();
   }
 
@@ -225,15 +226,32 @@ export class ThermostatSliderCard extends HTMLElement {
     if (state === 'off') return { family: null, modeKey: null, isOff: true };
 
     if (this._domain === 'climate') {
+      // Remember the last ACTIVE action so ambiguous modes (auto/heat_cool)
+      // can keep their color through idle compressor cycles.
+      const action = entity.attributes.hvac_action;
+      if (action === 'heating') this._lastActionFamily = 'raise';
+      if (action === 'cooling') this._lastActionFamily = 'lower';
+
       if (state === 'heat') return { family: 'raise', modeKey: 'heat', isOff: false };
       if (state === 'cool') return { family: 'lower', modeKey: 'cool', isOff: false };
       if (state === 'dry') return { family: 'lower', modeKey: 'dry', isOff: false };
       if (state === 'fan_only') return { family: 'neutral', modeKey: 'fan_only', isOff: false };
-      // heat_cool / auto: stable mode is ambiguous — follow the live action
-      // when the integration reports one, default to raise otherwise.
-      const action = entity.attributes.hvac_action;
-      const family = action === 'cooling' ? 'lower' : 'raise';
-      return { family, modeKey: state, isOff: false };
+
+      // heat_cool / auto — resolution ladder: live action, then what the
+      // device CAN do (hvac_modes), then the last action seen (sticky),
+      // then neutral: no claim until the device shows its hand.
+      if (action === 'heating' || action === 'cooling') {
+        return { family: this._lastActionFamily, modeKey: state, isOff: false };
+      }
+      const modes = entity.attributes.hvac_modes || [];
+      const canHeat = modes.includes('heat') || modes.includes('heat_cool');
+      const canCool = modes.includes('cool') || modes.includes('heat_cool');
+      if (canHeat && !canCool) return { family: 'raise', modeKey: state, isOff: false };
+      if (canCool && !canHeat) return { family: 'lower', modeKey: state, isOff: false };
+      if (this._lastActionFamily) {
+        return { family: this._lastActionFamily, modeKey: state, isOff: false };
+      }
+      return { family: 'neutral', modeKey: state, isOff: false };
     }
     if (this._domain === 'humidifier') {
       // device_class is optional; absent → assume humidifier (raising).

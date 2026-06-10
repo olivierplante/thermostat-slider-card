@@ -99,7 +99,7 @@ The slider fill's color follows the device's **mode** — what it is set to do �
 - **Cyan** — lowering the value: cooling, drying, dehumidifying
 - **Grey** — neutral: fans (and climate `fan_only` mode)
 
-For climate `heat_cool`/`auto` modes the fill follows the live `hvac_action` when the integration reports one, and defaults to amber otherwise.
+For climate `heat_cool`/`auto` modes the color is resolved in order: the live `hvac_action` while actively heating or cooling, then the device's capabilities (a heat-only device in auto is amber, a cool-only one cyan, per `hvac_modes`), then the last active action seen (so a dual system keeps its color through idle compressor cycles), and finally neutral grey when the card has no information yet.
 
 The big number's accent still follows the **live action** (lights up amber/cyan while the device is actively working). Every mode color can be overridden — see [Theming](theming.md).
 

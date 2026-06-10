@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.1
+
+**Smarter colors in auto mode.** For climate devices in `auto` or `heat_cool`, the fill color is now resolved from the best available signal: the live action while actively heating or cooling, then the device's capabilities (a heat-only heat pump reads amber, a cool-only AC reads cyan, even while idle), then the last active action (a dual system keeps its color through idle compressor cycles instead of flip-flopping), and neutral grey when the card has no information yet.
+
 ## 1.3.0
 
 **Beyond thermostats.** The card now works with `humidifier`, `fan` and `water_heater` entities, with the right attributes, services and units per domain. Humidity shows as `%`, a fan's slider sets its speed, and a water heater's its target temperature. The domain is detected automatically from the entity.

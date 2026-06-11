@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.3
+
+**Slimmer install.** The card's documentation and screenshots are no longer duplicated inside the component folder that HACS installs into your Home Assistant config; they remain on the repository root where the README links to them. No functional changes.
+
 ## 1.3.2
 
 **Misconfigurations now speak up.** Pointing the card at an unsupported entity type (for example a humidity `sensor` instead of the `humidifier` entity) shows a clear message on the card instead of a half-working slider. A nonexistent entity_id shows "Entity not found" instead of pretending the device is offline, and heals automatically when the entity appears. Preset-only fans without speed control say so. Invalid `min`/`max`/`step` values are ignored safely instead of breaking the slider.

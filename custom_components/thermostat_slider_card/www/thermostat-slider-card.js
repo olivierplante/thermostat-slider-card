@@ -103,17 +103,25 @@ export class ThermostatSliderCard extends HTMLElement {
       throw new Error('Please define an entity');
     }
 
-    // Resolve the entity's domain adapter. Unknown domains warn and fall
-    // back to climate behavior (so a misconfigured card still renders).
+    // Resolve the entity's domain adapter. Unknown domains warn AND render
+    // a visible in-card message — a console warning alone is invisible on a
+    // dashboard, and limping along as a pseudo-climate reads as a card bug
+    // (learned from issue #7: a humidity sensor configured by mistake).
     const domain = String(config.entity).split('.')[0];
-    if (!DOMAIN_ADAPTERS[domain]) {
+    this._unsupportedDomain = DOMAIN_ADAPTERS[domain] ? null : domain;
+    if (this._unsupportedDomain) {
       console.warn(
-        `thermostat-slider-card: unsupported domain "${domain}", treating ` +
-          `it like climate. Supported: ${Object.keys(DOMAIN_ADAPTERS).join(', ')}.`
+        `thermostat-slider-card: unsupported domain "${domain}". ` +
+          `Supported: ${Object.keys(DOMAIN_ADAPTERS).join(', ')}.`
       );
     }
     this._domain = DOMAIN_ADAPTERS[domain] ? domain : 'climate';
     this._adapter = DOMAIN_ADAPTERS[this._domain];
+
+    // Config-time issues feed the on-card warning chip (visible, tappable)
+    // in addition to console warnings — the console is invisible to most
+    // dashboard users, especially in the Companion app.
+    this._configIssues = [];
 
     // Layout: 'full' (default) or 'one-line'. An unknown value falls back to
     // 'full' (so a typo never breaks the dashboard) and warns to the console.
@@ -124,6 +132,7 @@ export class ThermostatSliderCard extends HTMLElement {
           `to "full". Valid values: "full", "one-line".`
       );
       layout = 'full';
+      this._configIssues.push(`unknown layout "${config.layout}"; using "full"`);
     }
 
     // slider_width: percentage of the row the slider occupies in one-line
@@ -151,6 +160,57 @@ export class ThermostatSliderCard extends HTMLElement {
       }
     }
 
+    // Invalid range/step config: warn and ignore the bad values so the
+    // entity's own limits take over (never NaN math).
+    let min = config.min;
+    let max = config.max;
+    const cfgMin = asNumber(config.min);
+    const cfgMax = asNumber(config.max);
+    if (cfgMin !== null && cfgMax !== null && cfgMin >= cfgMax) {
+      console.warn(
+        `thermostat-slider-card: min (${cfgMin}) must be below max ` +
+          `(${cfgMax}); ignoring both.`
+      );
+      min = undefined;
+      max = undefined;
+      this._configIssues.push(
+        `min (${cfgMin}) is not below max (${cfgMax}); both ignored`);
+    }
+    let step = config.step;
+    const cfgStep = asNumber(config.step);
+    if (cfgStep !== null && cfgStep <= 0) {
+      console.warn(
+        `thermostat-slider-card: step (${cfgStep}) must be positive; ignoring.`
+      );
+      step = undefined;
+      this._configIssues.push(`step (${cfgStep}) is not positive; ignored`);
+    }
+
+    // device_class override: humidifier-domain only (the only supported
+    // domain that has device classes in HA), values humidifier|dehumidifier.
+    let deviceClass = config.device_class;
+    if (config.device_class !== undefined) {
+      if (this._domain !== 'humidifier') {
+        console.warn(
+          `thermostat-slider-card: device_class has no effect on ` +
+            `${this._domain} entities; remove it.`
+        );
+        this._configIssues.push(
+          `device_class has no effect on ${this._domain} entities`);
+        deviceClass = undefined;
+      } else if (config.device_class !== 'humidifier'
+          && config.device_class !== 'dehumidifier') {
+        console.warn(
+          `thermostat-slider-card: invalid device_class ` +
+            `"${config.device_class}"; use "humidifier" or "dehumidifier".`
+        );
+        this._configIssues.push(
+          `invalid device_class "${config.device_class}"; ` +
+            `use "humidifier" or "dehumidifier"`);
+        deviceClass = undefined;
+      }
+    }
+
     // Alert thresholds. alert_low / alert_high accept number | entity-id |
     // false (disable). freeze_threshold is a deprecated alias for alert_low.
     let alertLow = config.alert_low;
@@ -160,11 +220,15 @@ export class ThermostatSliderCard extends HTMLElement {
           'thermostat-slider-card: both freeze_threshold and alert_low are ' +
             'set — alert_low wins. Remove freeze_threshold.'
         );
+        this._configIssues.push(
+          'both freeze_threshold and alert_low set; remove freeze_threshold');
       } else {
         console.warn(
           'thermostat-slider-card: freeze_threshold is deprecated, use ' +
             'alert_low instead.'
         );
+        this._configIssues.push(
+          'freeze_threshold is deprecated; rename it to alert_low');
         alertLow = config.freeze_threshold;
       }
     }
@@ -177,11 +241,16 @@ export class ThermostatSliderCard extends HTMLElement {
       entity: config.entity,
       layout,
       slider_width: sliderWidth,
+      min,
+      max,
+      step,
+      device_class: deviceClass,
       alert_low: alertLow,
       alert_high: config.alert_high,
     };
     this._rendered = false;
     this._lastActionFamily = null; // sticky auto-mode memory, per entity
+    this._warned = new Set(); // warn-once registry, per config
     this._render();
   }
 
@@ -210,10 +279,27 @@ export class ThermostatSliderCard extends HTMLElement {
     const max = asNumber(this._config.max)
       ?? (adapter.entityMax ? asNumber(attrs[adapter.entityMax]) : null)
       ?? adapter.fallback.max;
-    const step = asNumber(this._config.step)
+    let step = asNumber(this._config.step)
       ?? (adapter.entityStep ? asNumber(attrs[adapter.entityStep]) : null)
       ?? adapter.fallback.step;
+    if (!(step > 0)) step = adapter.fallback.step;
+    // Final sanity: a config/entity mix can still invert the range
+    // (e.g. config min 40 with entity max 30). Never produce NaN math.
+    this._rangeInvalid = !(min < max);
+    if (!(min < max)) {
+      this._warnOnce('range',
+        `resolved slider range ${min}–${max} is invalid; using the ` +
+          `${adapter.fallback.min}–${adapter.fallback.max} fallback`);
+      return { min: adapter.fallback.min, max: adapter.fallback.max, step };
+    }
     return { min, max, step };
+  }
+
+  /** Warn once per key per config (avoids per-state-update console spam). */
+  _warnOnce(key, message) {
+    if (this._warned.has(key)) return;
+    this._warned.add(key);
+    console.warn(`thermostat-slider-card: ${message}`);
   }
 
   /**
@@ -254,8 +340,7 @@ export class ThermostatSliderCard extends HTMLElement {
       return { family: 'neutral', modeKey: state, isOff: false };
     }
     if (this._domain === 'humidifier') {
-      // device_class is optional; absent → assume humidifier (raising).
-      const lowering = entity.attributes.device_class === 'dehumidifier';
+      const lowering = this._getHumidifierClass(entity) === 'dehumidifier';
       return {
         family: lowering ? 'lower' : 'raise',
         modeKey: lowering ? 'dehumidify' : 'humidify',
@@ -267,6 +352,21 @@ export class ThermostatSliderCard extends HTMLElement {
     }
     // water_heater
     return { family: 'raise', modeKey: 'water-heater', isOff: false };
+  }
+
+  /**
+   * Humidifier direction: card config `device_class` overrides the entity
+   * attribute; absent everywhere → assume humidifier (raising) with a
+   * one-time warning, since the wrong direction flips palette and alerts.
+   */
+  _getHumidifierClass(entity) {
+    const cls = this._config.device_class || entity.attributes.device_class;
+    if (!cls) {
+      this._warnOnce('device_class',
+        `${this._config.entity} has no device_class; assuming "humidifier". ` +
+          `Set "device_class: dehumidifier" in the card config if it is one.`);
+    }
+    return cls || 'humidifier';
   }
 
   /** Whether the entity can be toggled on/off (drives the long-press). */
@@ -296,6 +396,22 @@ export class ThermostatSliderCard extends HTMLElement {
           height: 100%;
           display: flex;
           flex-direction: column;
+          position: relative;
+        }
+        /* Config-warning chip: a quiet, tappable hint that some config on
+           this card is being ignored or can never work. Hidden when clean. */
+        .config-warning {
+          position: absolute;
+          top: 4px;
+          right: 6px;
+          z-index: 3;
+          cursor: pointer;
+          color: var(--tsc-warning-color, #FBBF24);
+          opacity: 0.65;
+          line-height: 1;
+        }
+        .config-warning ha-icon {
+          --mdc-icon-size: 14px;
         }
         .card.unavailable {
           opacity: 0.5;
@@ -360,6 +476,31 @@ export class ThermostatSliderCard extends HTMLElement {
           width: 100%;
           padding: 8px 0;
           margin-top: auto;
+          position: relative;
+        }
+        /* Transient informational bubble over the slider (e.g. interacting
+           with a range-setpoint thermostat the slider can't control). */
+        .slider-popover.below {
+          bottom: auto;
+          top: calc(100% + 6px);
+        }
+        .slider-popover {
+          position: absolute;
+          bottom: calc(100% + 6px);
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(15, 23, 42, 0.95);
+          color: var(--primary-text-color, #FFF);
+          font-size: 12px;
+          font-weight: 500;
+          padding: 4px 8px;
+          border-radius: 6px;
+          white-space: normal;
+          max-width: calc(100% - 8px);
+          width: max-content;
+          text-align: center;
+          z-index: 2;
+          pointer-events: none;
         }
         .slider-track {
           position: relative;
@@ -469,6 +610,18 @@ export class ThermostatSliderCard extends HTMLElement {
           color: var(--tsc-offline-color, var(--disabled-text-color, rgba(255, 255, 255, 0.4)));
           padding: 16px 0;
         }
+        /* Unsupported entity domain: message rendered in the normal card
+           shell (both layouts), replacing the reading + slider. */
+        .unsupported {
+          font-size: 13px;
+          color: var(--tsc-name-color, var(--secondary-text-color, rgba(255, 255, 255, 0.6)));
+          line-height: 1.5;
+          flex: 1 1 auto;
+          min-width: 0;
+        }
+        .unsupported code {
+          color: var(--primary-text-color, #FFF);
+        }
         .hidden {
           display: none !important;
         }
@@ -568,6 +721,7 @@ export class ThermostatSliderCard extends HTMLElement {
         }
       </style>
       <div class="card ${this._config.layout === 'one-line' ? 'layout-one-line' : ''}" id="card">
+        <span class="config-warning hidden" id="config-warning"><ha-icon icon="mdi:alert-circle-outline"></ha-icon></span>
         <div class="alert-banner hidden" id="alert-banner">
           <span class="alert-icon" id="alert-icon"></span>
           <span class="alert-text" id="alert-text"></span>
@@ -579,7 +733,9 @@ export class ThermostatSliderCard extends HTMLElement {
         <div class="name" id="name"></div>
         <div class="temperature" id="temperature"></div>
         <div class="offline-text hidden" id="offline">Offline</div>
+        <div class="unsupported hidden" id="unsupported"></div>
         <div class="slider-container" id="slider-container">
+          <span class="slider-popover hidden" id="slider-popover"></span>
           <div class="slider-track" id="slider-track">
             <div class="slider-fill" id="slider-fill"></div>
             <div class="slider-thumb" id="slider-thumb"></div>
@@ -595,6 +751,23 @@ export class ThermostatSliderCard extends HTMLElement {
       sliderContainer.style.flexBasis = `${this._config.slider_width}%`;
     }
 
+    // Unsupported entity domain: show the message in place of the reading
+    // and slider, keep the name, attach no gesture listeners.
+    if (this._unsupportedDomain) {
+      this.shadowRoot.getElementById('name').textContent =
+        this._config.name || this._config.entity;
+      this.shadowRoot.getElementById('temperature').classList.add('hidden');
+      this.shadowRoot.getElementById('slider-container').classList.add('hidden');
+      const message = this.shadowRoot.getElementById('unsupported');
+      message.innerHTML =
+        `Unsupported entity type "<code>${this._unsupportedDomain}</code>"` +
+        ` for <code>${this._config.entity}</code>. Use a <code>climate</code>,` +
+        ` <code>humidifier</code>, <code>fan</code> or` +
+        ` <code>water_heater</code> entity.`;
+      message.classList.remove('hidden');
+      return;
+    }
+
     this._setupEventListeners();
     if (this._hass) this._updateDisplay();
   }
@@ -608,6 +781,7 @@ export class ThermostatSliderCard extends HTMLElement {
       if (this._isDragging) return;
       if (e.target.closest('.slider-track') || e.target.closest('.slider-thumb')) return;
       if (e.target.closest('.alert-inline')) return;
+      if (e.target.closest('.config-warning')) return;
       this._openMoreInfo();
     });
 
@@ -617,6 +791,13 @@ export class ThermostatSliderCard extends HTMLElement {
     alertIcon.addEventListener('click', (e) => {
       e.stopPropagation();
       this._toggleAlertPopover();
+    });
+
+    // Config-warning chip: tap to list the card's current config issues.
+    const chip = this.shadowRoot.getElementById('config-warning');
+    chip.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._showSliderPopover((this._currentIssues || []).join(' • '));
     });
 
     track.addEventListener('mousedown', (e) => this._startDrag(e));
@@ -636,11 +817,20 @@ export class ThermostatSliderCard extends HTMLElement {
 
   _startDrag(e) {
     if (!this._hass || !this._config) return;
+    if (this._inertSlider) return; // message state: nothing to control
     const entity = this._hass.states[this._config.entity];
     if (!entity || entity.state === 'unavailable') return;
 
     e.preventDefault();
     e.stopPropagation();
+
+    // Range-setpoint thermostat: the slider can't set anything — explain
+    // at the point of interaction instead of issuing a failing write.
+    if (this._rangeSetpoints) {
+      this._showSliderPopover(
+        "Range setpoints (target_temp_low/high) aren't supported yet");
+      return;
+    }
 
     this._isDragging = true;
     const point = e.touches ? e.touches[0] : e;
@@ -653,7 +843,7 @@ export class ThermostatSliderCard extends HTMLElement {
     // device. Movement cancels (becomes a drag); firing consumes the
     // gesture (no tap-step, no drag on release).
     if (this._longPressTimer) clearTimeout(this._longPressTimer);
-    if (this._config.allow_toggle !== false && this._supportsToggle(entity)) {
+    if (this._config.allow_toggle !== false) {
       this._longPressTimer = setTimeout(() => {
         this._longPressTimer = null;
         if (this._isDragging && !this._dragMoved) this._fireToggle();
@@ -732,8 +922,16 @@ export class ThermostatSliderCard extends HTMLElement {
 
   /** Long-press fired: toggle the device with a visible confirmation. */
   _fireToggle() {
-    this._toggleFired = true;
+    this._toggleFired = true; // consume the gesture either way
     this.shadowRoot.getElementById('slider-thumb').classList.remove('dragging');
+
+    // Held on a device that can't turn on/off: explain right here instead
+    // of silently doing nothing (the console is invisible on dashboards).
+    const entity = this._hass.states[this._config.entity];
+    if (!entity || !this._supportsToggle(entity)) {
+      this._showSliderPopover("This device can't be turned on/off");
+      return;
+    }
 
     this._hass.callService('homeassistant', 'toggle', {
       entity_id: this._config.entity,
@@ -879,15 +1077,46 @@ export class ThermostatSliderCard extends HTMLElement {
     }, 3000);
   }
 
+  /**
+   * Collect a chip issue for an entity-reference config value that can't
+   * currently resolve (missing, unavailable, or non-numeric). Re-evaluated
+   * on every state update, so transient startup races self-clear.
+   */
+  _collectRefIssue(val, label, issues) {
+    if (typeof val !== 'string' || !val.includes('.')) return;
+    const refEntity = this._hass.states[val];
+    if (!refEntity) {
+      issues.push(`${label}: entity "${val}" not found`);
+      return;
+    }
+    if (refEntity.state === 'unavailable' || refEntity.state === 'unknown'
+        || isNaN(parseFloat(refEntity.state))) {
+      issues.push(`${label}: "${val}" has no numeric value`);
+    }
+  }
+
   /** Resolve a threshold: static number, entity ID, or null. */
-  _resolveThreshold(val) {
+  _resolveThreshold(val, label) {
     const n = asNumber(val);
     if (n !== null) return n;
     if (typeof val === 'string' && val.includes('.')) {
       const entity = this._hass.states[val];
-      if (entity && entity.state !== 'unavailable' && entity.state !== 'unknown') {
+      if (!entity) {
+        if (label) {
+          this._warnOnce(`ref:${label}`,
+            `${label} references missing entity "${val}"; the alert will ` +
+              `never fire`);
+        }
+        return null;
+      }
+      if (entity.state !== 'unavailable' && entity.state !== 'unknown') {
         const parsed = parseFloat(entity.state);
         if (!isNaN(parsed)) return parsed;
+      }
+      if (label) {
+        this._warnOnce(`refval:${label}`,
+          `${label} entity "${val}" has no numeric value ` +
+            `(state: "${entity.state}"); the alert can't fire`);
       }
     }
     return null;
@@ -900,17 +1129,17 @@ export class ThermostatSliderCard extends HTMLElement {
   _getAlertDefaults(entity) {
     if (this._domain === 'climate') return { low: 5, high: null };
     if (this._domain === 'humidifier') {
-      const dehumidifier = entity.attributes.device_class === 'dehumidifier';
+      const dehumidifier = this._getHumidifierClass(entity) === 'dehumidifier';
       return dehumidifier ? { low: null, high: 65 } : { low: 25, high: 65 };
     }
     return { low: null, high: null }; // fan, water_heater: opt-in only
   }
 
   /** Resolve one alert threshold from config + defaults. */
-  _getAlertThreshold(configValue, defaultValue) {
+  _getAlertThreshold(configValue, defaultValue, label) {
     if (configValue === false) return null;
     if (configValue === undefined) return defaultValue;
-    return this._resolveThreshold(configValue);
+    return this._resolveThreshold(configValue, label);
   }
 
   _getAlertLabels(entity) {
@@ -947,6 +1176,7 @@ export class ThermostatSliderCard extends HTMLElement {
 
   _updateDisplay() {
     if (!this._hass || !this._config) return;
+    if (this._unsupportedDomain) return; // static message card, nothing to update
 
     const entity = this._hass.states[this._config.entity];
     const card = this.shadowRoot.getElementById('card');
@@ -964,26 +1194,93 @@ export class ThermostatSliderCard extends HTMLElement {
     const oneLine = this._config.layout === 'one-line';
     const adapter = this._adapter;
 
+    const messageEl = this.shadowRoot.getElementById('unsupported');
+    const chipEl = this.shadowRoot.getElementById('config-warning');
+
     // Set name
     const name = this._config.name
-      || (entity ? entity.attributes.friendly_name : 'Unknown');
+      || (entity ? entity.attributes.friendly_name : this._config.entity);
     nameEl.textContent = name;
 
+    // Entity not found (typo, or not registered yet): say so instead of
+    // pretending the device is offline. Heals on a later hass update.
+    if (!entity) {
+      card.classList.add('unavailable');
+      tempEl.classList.add('hidden');
+      offlineEl.classList.add('hidden');
+      sliderContainer.classList.add('hidden');
+      alertBanner.classList.add('hidden');
+      alertInline.classList.add('hidden');
+      messageEl.innerHTML =
+        `Entity not found: <code>${this._config.entity}</code>`;
+      messageEl.classList.remove('hidden');
+      chipEl.classList.add('hidden');
+      this._inertSlider = true;
+      return;
+    }
+
     // Handle unavailable state
-    if (!entity || entity.state === 'unavailable') {
+    if (entity.state === 'unavailable') {
       card.classList.add('unavailable');
       tempEl.classList.add('hidden');
       offlineEl.classList.remove('hidden');
       sliderContainer.classList.add('hidden');
       alertBanner.classList.add('hidden');
       alertInline.classList.add('hidden');
+      messageEl.classList.add('hidden');
+      chipEl.classList.add('hidden');
       return;
+    }
+
+    // Preset-only fan (no SET_SPEED feature): the slider has nothing to
+    // control, so say so instead of issuing service calls that fail.
+    if (this._domain === 'fan') {
+      const features = entity.attributes.supported_features;
+      if (features !== null && features !== undefined && (features & 1) === 0) {
+        card.classList.remove('unavailable');
+        tempEl.classList.add('hidden');
+        offlineEl.classList.add('hidden');
+        sliderContainer.classList.add('hidden');
+        alertBanner.classList.add('hidden');
+        alertInline.classList.add('hidden');
+        messageEl.innerHTML =
+          `<code>${this._config.entity}</code> doesn't support speed ` +
+          `control (preset-only fan).`;
+        messageEl.classList.remove('hidden');
+        chipEl.classList.add('hidden');
+        this._inertSlider = true;
+        return;
+      }
     }
 
     card.classList.remove('unavailable');
     tempEl.classList.remove('hidden');
     offlineEl.classList.add('hidden');
     sliderContainer.classList.remove('hidden');
+    messageEl.classList.add('hidden');
+    this._inertSlider = false;
+
+    // Config-warning chip: static config issues + state-dependent ones,
+    // re-evaluated fresh so resolved problems clear the chip by themselves.
+    const issues = [...this._configIssues];
+    if (typeof this._config.alert_low !== 'undefined' && this._config.alert_low !== false) {
+      this._collectRefIssue(this._config.alert_low, 'alert_low', issues);
+    }
+    if (typeof this._config.alert_high !== 'undefined' && this._config.alert_high !== false) {
+      this._collectRefIssue(this._config.alert_high, 'alert_high', issues);
+    }
+    if (this._config.threshold) {
+      this._collectRefIssue(this._config.threshold, 'threshold', issues);
+    }
+    if (this._config.timer && !this._hass.states[this._config.timer]) {
+      issues.push(`timer: entity "${this._config.timer}" not found`);
+    }
+    this._getRange();
+    if (this._rangeInvalid) {
+      issues.push('slider range resolves inverted; using the fallback range');
+    }
+    this._currentIssues = issues;
+    chipEl.classList.toggle('hidden', issues.length === 0);
 
     // Current reading (per-domain attribute, unit and precision)
     const currentValue = asNumber(entity.attributes[adapter.currentAttr]);
@@ -1018,8 +1315,8 @@ export class ThermostatSliderCard extends HTMLElement {
       const defaults = adapter.alerts
         ? this._getAlertDefaults(entity) : { low: null, high: null };
       const labels = this._getAlertLabels(entity);
-      const low = this._getAlertThreshold(this._config.alert_low, defaults.low);
-      const high = this._getAlertThreshold(this._config.alert_high, defaults.high);
+      const low = this._getAlertThreshold(this._config.alert_low, defaults.low, 'alert_low');
+      const high = this._getAlertThreshold(this._config.alert_high, defaults.high, 'alert_high');
 
       if (currentValue !== null && low !== null && currentValue < low) {
         alertMdi = labels.low.icon;
@@ -1031,8 +1328,13 @@ export class ThermostatSliderCard extends HTMLElement {
         showAlert = true;
       } else if (this._config.timer) {
         const timerEntity = this._hass.states[this._config.timer];
+        if (!timerEntity) {
+          this._warnOnce('ref:timer',
+            `timer references missing entity "${this._config.timer}"; the ` +
+              `stuck alert will never fire`);
+        }
         const thresholdVal = this._config.threshold
-          ? this._resolveThreshold(this._config.threshold) : 10;
+          ? this._resolveThreshold(this._config.threshold, 'threshold') : 10;
 
         if (timerEntity && timerEntity.state === 'idle'
             && currentValue !== null && thresholdVal !== null) {
@@ -1067,12 +1369,34 @@ export class ThermostatSliderCard extends HTMLElement {
       alertPopover.classList.add('hidden');
     }
 
+    // Range-setpoint thermostats (target_temp_low/high, no single target):
+    // the card still displays, but the slider has nothing to set — flag it
+    // so interaction explains itself instead of issuing failing writes.
+    const target = asNumber(entity.attributes[adapter.targetAttr]);
+    this._rangeSetpoints = this._domain === 'climate' && target === null
+      && (asNumber(entity.attributes.target_temp_low) !== null
+        || asNumber(entity.attributes.target_temp_high) !== null);
+
     // Setpoint / slider position (only update if not dragging). A missing
     // or non-numeric target hides the pill instead of faking a value.
     if (!this._isDragging && !this._debounceTimer) {
-      const setpoint = asNumber(entity.attributes[adapter.targetAttr]);
-      this._updateSliderVisual(setpoint);
+      this._updateSliderVisual(target);
     }
+  }
+
+  /** Show a transient informational bubble over the slider. */
+  _showSliderPopover(message) {
+    const pop = this.shadowRoot.getElementById('slider-popover');
+    pop.textContent = message;
+    pop.classList.remove('hidden', 'below');
+    // Near the viewport top (or under HA's toolbar) the bubble would clip —
+    // flip it below the slider instead.
+    if (pop.getBoundingClientRect().top < 60) pop.classList.add('below');
+    if (this._sliderPopTimer) clearTimeout(this._sliderPopTimer);
+    this._sliderPopTimer = setTimeout(() => {
+      pop.classList.add('hidden');
+      this._sliderPopTimer = null;
+    }, 3000);
   }
 
   static getConfigElement() {

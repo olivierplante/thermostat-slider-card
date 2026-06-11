@@ -22,6 +22,10 @@ The card works with any entity from these domains — it detects the domain auto
 
 A fan has no separate measured value — its speed is both the reading and the setpoint.
 
+Misconfigurations announce themselves instead of failing silently: any other entity type (e.g. a humidity `sensor` instead of the `humidifier` entity) renders an "unsupported entity type" message, a nonexistent entity_id shows "Entity not found", and a preset-only fan (no speed support) says so. Invalid `min`/`max`/`step` values are ignored with a console warning, as are alert thresholds or timers that point at missing or non-numeric entities.
+
+Thermostats using **range setpoints** (`target_temp_low`/`target_temp_high` instead of a single target) still display their reading, colors and alerts; the slider shows a "range setpoints aren't supported yet" bubble when touched instead of issuing a write the device would reject.
+
 ## Full options
 
 ```yaml
@@ -48,6 +52,7 @@ threshold: input_number.heat_threshold  # Optional: stuck-alert threshold (numbe
 | `slider_width` | `55` | One-line only: slider width as a % of the card (number, clamped 20–80) |
 | `min` / `max` / `step` | from the entity | Slider range and increment — see [Slider range](#slider-range) |
 | `allow_toggle` | `true` | Long-press the slider (1s) to toggle the device — `false` disables |
+| `device_class` | from the entity | Humidifier only: `humidifier` or `dehumidifier`, for integrations that omit the attribute (drives color, alert defaults and stuck direction) |
 | `alert_low` | per device | Low alert threshold — see [Alerts](#alerts) |
 | `alert_high` | per device | High alert threshold — see [Alerts](#alerts) |
 | `timer` | none | Timer entity for the stuck alert |

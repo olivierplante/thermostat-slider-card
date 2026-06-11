@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.3.2
+
+**Misconfigurations now speak up.** Pointing the card at an unsupported entity type (for example a humidity `sensor` instead of the `humidifier` entity) shows a clear message on the card instead of a half-working slider. A nonexistent entity_id shows "Entity not found" instead of pretending the device is offline, and heals automatically when the entity appears. Preset-only fans without speed control say so. Invalid `min`/`max`/`step` values are ignored safely instead of breaking the slider.
+
+**A quiet warning chip.** When some config on a card is being ignored or can never work (inverted ranges, deprecated keys, alerts pointing at missing entities), a small tappable ⚠ appears on the card listing the issues; fix the config and it disappears. Cards with clean config never show it.
+
+**The slider explains itself.** Thermostats using range setpoints (`target_temp_low`/`target_temp_high`) still display their reading, colors and alerts; touching the slider shows a "range setpoints aren't supported yet" bubble instead of issuing a write the device would reject. Long-pressing a device that can't be turned on/off says so the same way.
+
+**`device_class` override.** Humidifier integrations that omit the `device_class` attribute can now set it in the card config (`device_class: dehumidifier`), which drives the color, alert defaults and stuck direction.
+
 ## 1.3.1
 
 **Smarter colors in auto mode.** For climate devices in `auto` or `heat_cool`, the fill color is now resolved from the best available signal: the live action while actively heating or cooling, then the device's capabilities (a heat-only heat pump reads amber, a cool-only AC reads cyan, even while idle), then the last active action (a dual system keeps its color through idle compressor cycles instead of flip-flopping), and neutral grey when the card has no information yet.

@@ -176,13 +176,32 @@ describe("range resolution", () => {
 });
 
 describe("unknown domain", () => {
-  it("test_unknown_domain_warns_and_uses_climate_behavior", () => {
+  it("test_unknown_domain_warns_and_shows_visible_message", () => {
+    // A console warning is invisible on a dashboard (issue #7 follow-up:
+    // a sensor entity limping as a pseudo-climate looked like a card bug).
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const hass = makeHassEntity("sensor.thing", {
-      current_temperature: 20, temperature: 18,
-    }, "on");
+    const hass = makeHassEntity("sensor.thing", { friendly_name: "Hum" }, "64");
     const card = mountEntity("sensor.thing", {}, hass);
     expect(warn).toHaveBeenCalled();
-    expect(byId(card, "temperature").textContent).toBe("20.0°");
+    const message = card.shadowRoot.getElementById("unsupported");
+    expect(message.textContent).toContain("sensor");
+    expect(message.textContent).toContain("humidifier");
+  });
+
+  it("test_unknown_domain_hides_slider_and_reading", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const card = mountEntity("sensor.thing", {},
+      makeHassEntity("sensor.thing", {}, "64"));
+    expect(byId(card, "slider-container").classList.contains("hidden")).toBe(true);
+    expect(byId(card, "temperature").classList.contains("hidden")).toBe(true);
+  });
+
+  it("test_unknown_domain_respects_layout_shell", () => {
+    // The message reuses the normal card shell, so one-line keeps its row.
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const card = mountEntity("sensor.thing", { layout: "one-line" },
+      makeHassEntity("sensor.thing", {}, "64"));
+    expect(byId(card, "card").classList.contains("layout-one-line")).toBe(true);
+    expect(byId(card, "unsupported").classList.contains("hidden")).toBe(false);
   });
 });

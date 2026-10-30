@@ -94,43 +94,43 @@ describe("B: range-setpoint thermostats", () => {
     expect(byId(card, "slider-setpoint").classList.contains("hidden")).toBe(true);
   });
 
-  it("test_interacting_shows_popover_and_writes_nothing", () => {
+  // Range-setpoint interaction goes through the single
+  // `_startHandleGesture`/`_endHandleGesture` pipeline shared with
+  // single-setpoint mode — there is no "not supported" popover code path
+  // for range entities, so a track press just goes straight into the real
+  // gesture pipeline. This test asserts that tap-to-step-then-write
+  // behavior directly, with no popover assertion at all.
+  //
+  // A `pressTrack` press with no movement in between is a tap
+  // (`_startHandleGesture(e, null, 'track')` → `_endHandleGesture()`
+  // resolves a handle via `resolveTapHandle` and calls `_handleTap`).
+  // At clientX 100 on a 0-200px track (tapX 50%), the nearest handle to
+  // RANGE_ATTRS's low (19 → 52.17%) and high (24 → 73.91%) rendered
+  // positions is low, and the tap lands left of low's own rendered
+  // percent, so it steps low down by one resolved step (0.5, the climate
+  // adapter's fallback step since RANGE_ATTRS has no target_temp_step):
+  // 19 - 0.5 = 18.5. Once the 500ms debounce window (`RANGE_DEBOUNCE_MS`)
+  // elapses, `_commitHandleValue` batches that new low value with high's
+  // last confirmed value (24) into one write.
+  it("test_interacting_issues_a_batched_write", () => {
     const hass = makeHassEntity("climate.range", RANGE_ATTRS, "heat_cool");
     const card = mountEntity("climate.range", {}, hass);
     pressTrack(card);
-    const pop = byId(card, "slider-popover");
-    expect(pop.classList.contains("hidden")).toBe(false);
-    expect(pop.textContent).toContain("Range setpoints");
-    vi.advanceTimersByTime(2000); // debounce window: nothing must fire
-    expect(hass.calls).toHaveLength(0);
+    vi.advanceTimersByTime(2000); // range debounce window: write should fire
+    const writeCalls = hass.calls.filter((c) => c.service === "set_temperature");
+    expect(writeCalls).toHaveLength(1);
+    expect(writeCalls[0].data).toEqual({
+      entity_id: "climate.range",
+      target_temp_low: 18.5,
+      target_temp_high: 24,
+    });
   });
 
-  it("test_popover_flips_below_when_clipped_by_viewport_top", () => {
-    const hass = makeHassEntity("climate.range", RANGE_ATTRS, "heat_cool");
-    const card = mountEntity("climate.range", {}, hass);
-    const pop = byId(card, "slider-popover");
-    pop.getBoundingClientRect = () => ({ top: -12, bottom: 8, left: 0, right: 100 });
-    pressTrack(card);
-    expect(pop.classList.contains("below")).toBe(true);
-  });
-
-  it("test_popover_stays_above_when_there_is_room", () => {
-    const hass = makeHassEntity("climate.range", RANGE_ATTRS, "heat_cool");
-    const card = mountEntity("climate.range", {}, hass);
-    const pop = byId(card, "slider-popover");
-    pop.getBoundingClientRect = () => ({ top: 300, bottom: 320, left: 0, right: 100 });
-    pressTrack(card);
-    expect(pop.classList.contains("below")).toBe(false);
-  });
-
-  it("test_popover_auto_hides", () => {
-    const hass = makeHassEntity("climate.range", RANGE_ATTRS, "heat_cool");
-    const card = mountEntity("climate.range", {}, hass);
-    pressTrack(card);
-    vi.advanceTimersByTime(3000);
-    expect(byId(card, "slider-popover").classList.contains("hidden")).toBe(true);
-  });
-
+  // In 1.3.x this test checked that the range-setpoint "not supported"
+  // popover didn't fire for a plain single-setpoint thermostat. That
+  // popover is gone, so it now checks that a normal thermostat's
+  // tap-to-step write is unaffected by range setpoints sharing its code
+  // path.
   it("test_normal_thermostat_unaffected", () => {
     const hass = makeHassEntity("climate.x", {
       current_temperature: 20, temperature: 18, min_temp: 7, max_temp: 30,

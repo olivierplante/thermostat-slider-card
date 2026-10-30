@@ -213,3 +213,99 @@ describe("opt-out and capability guard", () => {
     expect(toggleCalls(hass)).toHaveLength(1);
   });
 });
+
+describe("range-mode long-press gating parity", () => {
+  // Same shape as silent-fallbacks.test.js's "B: range-setpoint
+  // thermostats" RANGE_ATTRS: heat_cool with target_temp_low/high and
+  // ClimateEntityFeature TARGET_TEMPERATURE_RANGE(2) | TURN_OFF(128) |
+  // TURN_ON(256) = 386, so the entity is both range-mode and toggleable.
+  const RANGE_ATTRS = {
+    current_temperature: 22.7,
+    target_temp_low: 19, target_temp_high: 24,
+    min_temp: 7, max_temp: 30, supported_features: 386,
+  };
+
+  function pressHandle(card, id, clientX = 50) {
+    const handle = byId(card, id);
+    handle.getBoundingClientRect = () => ({
+      left: 0, width: 200, right: 200, top: 0, bottom: 40, height: 40,
+    });
+    handle.dispatchEvent(new MouseEvent("mousedown", { clientX, bubbles: true }));
+    return handle;
+  }
+
+  function renderedSetpoints(card) {
+    return {
+      low: byId(card, "slider-setpoint-low")?.textContent,
+      high: byId(card, "slider-setpoint-high")?.textContent,
+    };
+  }
+
+  function writeCalls(hass) {
+    return hass.calls.filter((c) => c.service === "set_temperature");
+  }
+
+  describe.each([
+    ["low handle", "slider-thumb-low"],
+    ["high handle", "slider-thumb-high"],
+  ])("origin: %s", (_label, handleId) => {
+    it(`test_${handleId}_long_press_toggles_when_allowed_and_supported`, () => {
+      const hass = makeHassEntity("climate.range", RANGE_ATTRS, "heat_cool");
+      const card = mountEntity("climate.range", {}, hass);
+      const before = renderedSetpoints(card);
+      pressHandle(card, handleId);
+      vi.advanceTimersByTime(1000);
+      expect(toggleCalls(hass)).toEqual([
+        { domain: "homeassistant", service: "toggle", data: { entity_id: "climate.range" } },
+      ]);
+      // No setpoint mutation and no batched write as a result of the
+      // long-press, regardless of gesture origin.
+      expect(writeCalls(hass)).toHaveLength(0);
+      expect(renderedSetpoints(card)).toEqual(before);
+    });
+
+    it(`test_${handleId}_long_press_respects_allow_toggle_false`, () => {
+      const hass = makeHassEntity("climate.range", RANGE_ATTRS, "heat_cool");
+      const card = mountEntity("climate.range", { allow_toggle: false }, hass);
+      const before = renderedSetpoints(card);
+      pressHandle(card, handleId);
+      vi.advanceTimersByTime(1500);
+      expect(toggleCalls(hass)).toHaveLength(0);
+      expect(writeCalls(hass)).toHaveLength(0);
+      expect(renderedSetpoints(card)).toEqual(before);
+    });
+
+    it(`test_${handleId}_long_press_respects_missing_toggle_feature_bit`, () => {
+      // TARGET_TEMPERATURE_RANGE(2) only — no TURN_ON/TURN_OFF bits.
+      const hass = makeHassEntity("climate.range",
+        { ...RANGE_ATTRS, supported_features: 2 }, "heat_cool");
+      const card = mountEntity("climate.range", {}, hass);
+      const before = renderedSetpoints(card);
+      pressHandle(card, handleId);
+      vi.advanceTimersByTime(1500);
+      expect(toggleCalls(hass)).toHaveLength(0);
+      expect(writeCalls(hass)).toHaveLength(0);
+      expect(renderedSetpoints(card)).toEqual(before);
+    });
+  });
+
+  it("test_track_long_press_on_range_entity_now_toggles_like_any_other_origin", () => {
+    // The unified `_startHandleGesture` supports range entities fully,
+    // with no "not supported" popover check. A track long-press on a
+    // range entity fires the toggle the same as a long-press on
+    // The low handle/high handle (see the `origin: %s` cases above) or on a
+    // single-setpoint entity's track — gating parity holds across every
+    // origin, track included. Setpoints are still never mutated and no
+    // write is issued, as for every other long-press origin.
+    const hass = makeHassEntity("climate.range", RANGE_ATTRS, "heat_cool");
+    const card = mountEntity("climate.range", {}, hass);
+    const before = renderedSetpoints(card);
+    press(card, 50);
+    vi.advanceTimersByTime(1000);
+    expect(toggleCalls(hass)).toEqual([
+      { domain: "homeassistant", service: "toggle", data: { entity_id: "climate.range" } },
+    ]);
+    expect(writeCalls(hass)).toHaveLength(0);
+    expect(renderedSetpoints(card)).toEqual(before);
+  });
+});

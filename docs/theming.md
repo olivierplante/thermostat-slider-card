@@ -32,6 +32,14 @@ The card uses HA theme variables by default and works on both dark and light the
 | `--tsc-offline-color` | `var(--disabled-text-color)` | Offline text color |
 | `--tsc-setpoint-color` | `var(--primary-text-color)` | Setpoint text when outside fill |
 
+## Range setpoints (dual-handle mode)
+
+Range-setpoint entities (`target_temp_low`/`target_temp_high`, e.g. `heat_cool` or `auto` mode) use the **exact same mode-color resolution** as single-setpoint entities — see the CSS variables table above and [Mode colors](configuration.md#mode-colors) in the configuration docs for the full resolution ladder (`hvac_action`, then `hvac_modes` capability, then sticky last-active-action, then neutral).
+
+The filled band between the two handles picks up whichever family/mode color the entity's current state resolves to — via the same `--tsc-slider-fill`/`--tsc-slider-fill-cool`/`--tsc-slider-fill-neutral` family tokens and the same `--tsc-fill-heat`/`--tsc-fill-cool`/etc. per-mode overrides, exactly as the single-setpoint fill does. There is no per-handle color distinction and no new CSS custom properties for this mode: the Low and High handles themselves render no fill at all (only the band between them is ever colored), so there's nothing to configure beyond what you've already set for single-setpoint entities.
+
+If you've already customized `--tsc-fill-heat`, `--tsc-fill-cool`, `--tsc-slider-fill`, `--tsc-slider-fill-cool`, or `--tsc-slider-fill-neutral`, those same overrides apply automatically to range-setpoint entities — there's nothing additional to configure.
+
 ## Override in a theme
 
 ```yaml

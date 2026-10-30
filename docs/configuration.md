@@ -24,7 +24,7 @@ A fan has no separate measured value — its speed is both the reading and the s
 
 Misconfigurations announce themselves instead of failing silently: any other entity type (e.g. a humidity `sensor` instead of the `humidifier` entity) renders an "unsupported entity type" message, a nonexistent entity_id shows "Entity not found", and a preset-only fan (no speed support) says so. Invalid `min`/`max`/`step` values are ignored with a console warning, as are alert thresholds or timers that point at missing or non-numeric entities.
 
-Thermostats using **range setpoints** (`target_temp_low`/`target_temp_high` instead of a single target) still display their reading, colors and alerts; the slider shows a "range setpoints aren't supported yet" bubble when touched instead of issuing a write the device would reject.
+Thermostats using **range setpoints** (`target_temp_low`/`target_temp_high` instead of a single target, e.g. `heat_cool`/`auto` mode) get their own dual-handle slider — see [Range setpoints](#range-setpoints) below.
 
 ## Full options
 
@@ -37,6 +37,7 @@ slider_width: 55                        # Optional: one-line slider width % (def
 min: 14                                 # Optional: slider minimum (default: from the entity)
 max: 21                                 # Optional: slider maximum (default: from the entity)
 step: 0.5                               # Optional: slider increment (default: from the entity)
+min_gap: 2                              # Optional: range setpoints only — minimum low/high separation (default: one resolved step)
 allow_toggle: true                      # Optional: long-press the slider to toggle on/off (default: true)
 alert_low: 5                            # Optional: low alert threshold (number, entity, or false)
 alert_high: false                       # Optional: high alert threshold (number, entity, or false)
@@ -51,6 +52,7 @@ threshold: input_number.heat_threshold  # Optional: stuck-alert threshold (numbe
 | `layout` | `full` | Card layout: `full` (stacked) or `one-line` (compact row) |
 | `slider_width` | `55` | One-line only: slider width as a % of the card (number, clamped 20–80) |
 | `min` / `max` / `step` | from the entity | Slider range and increment — see [Slider range](#slider-range) |
+| `min_gap` | one resolved step | Range setpoints only: minimum low/high separation — see [Range setpoints](#range-setpoints) |
 | `allow_toggle` | `true` | Long-press the slider (1s) to toggle the device — `false` disables |
 | `device_class` | from the entity | Humidifier only: `humidifier` or `dehumidifier`, for integrations that omit the attribute (drives color, alert defaults and stuck direction) |
 | `alert_low` | per device | Low alert threshold — see [Alerts](#alerts) |
@@ -65,6 +67,16 @@ By default the slider range and step come from the **entity itself** (`min_temp`
 > **Upgrading from 1.2.x:** earlier versions defaulted climate sliders to 14–21 with step 0.5. If you relied on those defaults and prefer the tighter range, set `min: 14` and `max: 21` explicitly.
 
 If a setpoint is outside the slider's range, the fill clamps and the setpoint pill stays pinned at the edge of the track showing the real value.
+
+## Range setpoints
+
+Climate entities that report `target_temp_low`/`target_temp_high` instead of a single `temperature` (typically `heat_cool` or `auto` mode) get a **dual-handle slider**: a low handle and a high handle, each independently draggable and tappable, with the segment between them filled in to show the current comfort range. The big number, mode color, and alerts work the same as for single-setpoint entities.
+
+- Drag or tap either handle on its own — the other handle stays put.
+- The two handles can't be dragged past each other or squeezed closer than the minimum gap apart; the drag simply stops at that boundary.
+- By default that minimum gap is one slider step (see [Slider range](#slider-range)), so it scales automatically if you override `step`. Set `min_gap` to require a wider separation — useful for thermostats that enforce their own heat/cool separation wider than one step (there's no standard entity attribute to detect this automatically, so it has to be set explicitly). `min_gap` can only raise the floor: a value below the resolved step is ignored (with a single console warning) and the resolved step is used instead — it can never make the gap narrower than one step.
+- Long-pressing either handle, or the track, still toggles the device on/off exactly as it does for single-setpoint entities.
+- Writes are sent as a single `climate.set_temperature` call containing both `target_temp_low` and `target_temp_high`, since Home Assistant core requires them together.
 
 ## Layout
 

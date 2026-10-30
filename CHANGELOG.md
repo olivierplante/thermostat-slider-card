@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+**Range setpoints are adjustable.** Climate entities using range setpoints (`target_temp_low`/`target_temp_high`, typically in `heat_cool` or `auto` mode) now get a slider with two handles, Low and High, in place of the "range setpoints aren't supported yet" bubble. Each handle drags and tap-steps on its own using the same drag, tap and long-press behavior as a single-setpoint slider. Pressing anywhere on the track grabs the nearest handle. Both setpoints are written together in one `climate.set_temperature` call, as Home Assistant requires. The band between the handles is colored with the same mode colors and theme variables as the single-setpoint fill. Single-setpoint entities look and behave as before.
+
+**`min_gap` for range setpoints.** The handles can't cross or come closer than one slider step. Thermostats that enforce a wider heat/cool separation can raise that floor with `min_gap`. A value below one step is ignored with a console warning.
+
+**Rejected writes revert.** If the device rejects a setpoint change, the slider returns to the last confirmed value instead of showing a setpoint that never took effect. This now applies to single-setpoint sliders too.
+
 ## 1.3.3
 
 **Slimmer install.** The card's documentation and screenshots are no longer duplicated inside the component folder that HACS installs into your Home Assistant config; they remain on the repository root where the README links to them. No functional changes.

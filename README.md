@@ -20,6 +20,7 @@ Or stack several zones compactly with the `one-line` layout:
 - Works with climate, humidifier, fan and water_heater entities (°/% auto-detected)
 - Large current reading with mode-true colors — coolers read cyan, heaters amber, fans grey
 - Drag or tap slider for setpoint adjustment (debounced service calls)
+- Range-setpoint climate entities (`heat_cool`/`auto` mode, `target_temp_low`/`target_temp_high`) get independent dual-handle drag and tap
 - Long-press the slider to toggle the device on/off
 - Device-aware alerts: freeze risk, too humid (mold), too dry, and direction-aware "struggling" detection
 - Compact `one-line` layout for stacking several devices in a small space

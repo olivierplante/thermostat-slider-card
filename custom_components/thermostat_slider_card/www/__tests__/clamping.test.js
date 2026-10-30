@@ -5,8 +5,10 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 
 import { byId, makeHassEntity, mountEntity } from "./helpers.js";
+import { clampToMinGap } from "../thermostat-slider-card.js";
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -117,5 +119,109 @@ describe("missing or invalid target", () => {
     }, "heat");
     expect(byId(card, "slider-setpoint").classList.contains("hidden")).toBe(false);
     expect(byId(card, "slider-setpoint").textContent).toBe("18.0°");
+  });
+});
+
+describe("clampToMinGap", () => {
+  // `clampToMinGap` itself only ever receives an already-resolved `gap`
+  // value — it has no knowledge of `min_gap` config or a default step,
+  // that resolution happens one layer up in `_resolveEffectiveMinGap`
+  // (covered separately in `min-gap-config.test.js`). This case confirms
+  // the clamp enforces exactly whatever `gap` it's given, never less,
+  // regardless of where that value came from.
+  it("test_the_given_gap_is_enforced_exactly_regardless_of_its_source", () => {
+    fc.assert(
+      fc.property(
+        fc.double({ noNaN: true, min: -200, max: 200 }),
+        fc.double({ noNaN: true, min: -200, max: 200 }),
+        fc.double({ noNaN: true, min: 0.01, max: 50 }),
+        fc.boolean(),
+        (attemptedValue, otherHandleValue, gap, isLow) => {
+          const result = clampToMinGap(attemptedValue, otherHandleValue, isLow, gap);
+
+          const resolvedLow = isLow ? result : otherHandleValue;
+          const resolvedHigh = isLow ? otherHandleValue : result;
+
+          expect(Math.abs(resolvedHigh - resolvedLow)).toBeGreaterThanOrEqual(
+            gap - 1e-9,
+          );
+        },
+      ),
+      { numRuns: 100 },
+    );
+  });
+
+  it("test_low_handle_clamp_never_violates_the_effective_gap", () => {
+    fc.assert(
+      fc.property(
+        fc.double({ noNaN: true, min: -200, max: 200 }),
+        fc.double({ noNaN: true, min: -200, max: 200 }),
+        fc.double({ noNaN: true, min: 0, max: 50 }),
+        (attemptedValue, otherHandleValue, gap) => {
+          const result = clampToMinGap(attemptedValue, otherHandleValue, true, gap);
+
+          // Invariant: the low handle's resolved value is always at least
+          // `gap` below the other (high handle) value.
+          expect(otherHandleValue - result).toBeGreaterThanOrEqual(gap - 1e-9);
+
+          // If the attempted value already satisfies the gap, it must be
+          // returned unchanged (no unnecessary clamping).
+          if (otherHandleValue - attemptedValue >= gap) {
+            expect(result).toBe(attemptedValue);
+          } else {
+            expect(result).toBe(otherHandleValue - gap);
+          }
+        },
+      ),
+      { numRuns: 100 },
+    );
+  });
+
+  it("test_high_handle_clamp_never_violates_the_effective_gap", () => {
+    fc.assert(
+      fc.property(
+        fc.double({ noNaN: true, min: -200, max: 200 }),
+        fc.double({ noNaN: true, min: -200, max: 200 }),
+        fc.double({ noNaN: true, min: 0, max: 50 }),
+        (attemptedValue, otherHandleValue, gap) => {
+          const result = clampToMinGap(attemptedValue, otherHandleValue, false, gap);
+
+          // Invariant: the high handle's resolved value is always at
+          // least `gap` above the other (low handle) value.
+          expect(result - otherHandleValue).toBeGreaterThanOrEqual(gap - 1e-9);
+
+          // If the attempted value already satisfies the gap, it must be
+          // returned unchanged (no unnecessary clamping).
+          if (attemptedValue - otherHandleValue >= gap) {
+            expect(result).toBe(attemptedValue);
+          } else {
+            expect(result).toBe(otherHandleValue + gap);
+          }
+        },
+      ),
+      { numRuns: 100 },
+    );
+  });
+
+  it("test_clamp_never_allows_crossover_regardless_of_which_handle_moved", () => {
+    fc.assert(
+      fc.property(
+        fc.double({ noNaN: true, min: -200, max: 200 }),
+        fc.double({ noNaN: true, min: -200, max: 200 }),
+        fc.double({ noNaN: true, min: 0, max: 50 }),
+        fc.boolean(),
+        (attemptedValue, otherHandleValue, gap, isLow) => {
+          const result = clampToMinGap(attemptedValue, otherHandleValue, isLow, gap);
+
+          const resolvedLow = isLow ? result : otherHandleValue;
+          const resolvedHigh = isLow ? otherHandleValue : result;
+
+          expect(Math.abs(resolvedHigh - resolvedLow)).toBeGreaterThanOrEqual(
+            gap - 1e-9,
+          );
+        },
+      ),
+      { numRuns: 100 },
+    );
   });
 });
